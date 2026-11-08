@@ -1,0 +1,17 @@
+{
+  "processNames": ["inArt_PC"],
+  "windowTitlePatterns": ["消息提醒", "班级课表"],
+  "pollIntervalMs": 1500,
+  "keywords": ["消息", "提醒", "作业", "考试", "通知", "点名", "请假"],
+  "keywordMatchMode": "Contains",
+  "triggerOnWindowAppear": true,
+  "triggerOnExistingWindows": false,
+  "cooldownSeconds": 60,
+  "notificationDurationSeconds": 8,
+  "maskDurationSeconds": 3,
+  "textSources": {
+    "uia": false,
+    "win32": true,
+    "windowTitle": true
+  }
+}

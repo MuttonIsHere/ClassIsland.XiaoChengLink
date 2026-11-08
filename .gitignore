@@ -1,0 +1,55 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# XiaoChengLink（ClassIsland 小橙看班联动插件）· Git 忽略规则
+#
+# 注意：本仓库根目录就是插件目录（plugin/ 作为仓库根被推送）。
+#       manifest.yml / README.md / settings.sample.json / XiaoChengLink.csproj /
+#       src/ / .github/ 都是要提交的源码，下面的规则不会忽略它们。
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── .NET / MSBuild 构建产物 ────────────────────────────────────────────────
+# bin/ ：dotnet build 与本机 csc 直编（tools/build-env/build-plugin.ps1）的输出
+# obj/ ：NuGet restore / MSBuild 中间产物
+# cipx/：ClassIsland.PluginSdk 的 CreateCipx Target 生成的 .cipx 输出目录
+bin/
+obj/
+cipx/
+*.cipx
+*.binlog
+
+# ── 运行 / 测试 / 日志产物 ─────────────────────────────────────────────────
+TestResults/
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+*.coveragexml
+coverage/
+logs/
+*.log
+
+# ── Visual Studio / Rider / VS Code 的本地用户文件 ─────────────────────────
+.vs/
+.idea/
+.vscode/
+*.user
+*.csproj.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.DotSettings.user
+
+# ── 本地临时文件 / 操作系统杂物 ─────────────────────────────────────────────
+*.tmp
+*.bak
+*.orig
+*.rej
+*.swp
+*~
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ───────────────────────────────────────────────────────────────────────────
+# 必须提交、切勿在后续改动里忽略的文件（仅说明，不是规则）：
+#   manifest.yml   README.md   settings.sample.json   XiaoChengLink.csproj
+#   .github/       src/        src/Settings/README-SETTINGS.md
+# ───────────────────────────────────────────────────────────────────────────

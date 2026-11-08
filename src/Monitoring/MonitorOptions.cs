@@ -1,0 +1,238 @@
+// ─── MonitorOptions —— 插件配置模型（settings.json）──────────────────────────
+// 配置文件：<PluginConfigFolder>/settings.json
+//   · 首次运行不存在时：写入默认配置并记日志（不是 fatal，插件继续用内存默认值）。
+//   · 解析失败时：记 Error 日志并回落到默认值（绝不让配置问题拖垮插件/宿主）。
+//   · 字段名使用 camelCase；读取时大小写不敏感、允许注释与尾逗号（便于手工编辑）。
+// 【需实测】PluginConfigFolder 的实际路径；写入/读取 UTF-8。
+// 依赖：仅 BCL（System.Text.Json）。csc 直编时需要额外引用
+//       System.Text.Json.dll + System.Memory.dll（见 README 的构建命令）。
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using XiaoChengLink.Logging;
+
+namespace XiaoChengLink.Monitoring;
+
+/// <summary>
+/// 关键词匹配方式。
+/// （注意：类型名用 Kind，配置字段名仍按任务要求叫 keywordMatchMode，避免同名成员遮蔽。）
+/// </summary>
+public enum KeywordMatchKind
+{
+    /// <summary>子串包含（不区分大小写）。默认。</summary>
+    Contains = 0,
+
+    /// <summary>正则匹配（每条 keyword 作为一个正则表达式）。</summary>
+    Regex = 1,
+}
+
+/// <summary>文本来源开关。</summary>
+public sealed class TextSourceOptions
+{
+    /// <summary>
+    /// 是否用 UI Automation 读取窗口内文本。
+    /// 对本项目目标程序“小橙看班”(inArt_PC，Delphi/VCL 自绘) **无效**：
+    /// 本机实测 UIA/MSAA 只能拿到顶层窗口标题（见 research/uia/*.json），
+    /// 且对 Delphi 窗口做跨进程 UIA 读取有卡死风险，故默认关闭；
+    /// 需要监控其它标准 Win32/WPF/浏览器类窗口时可在 settings.json 里改为 true。
+    /// </summary>
+    public bool Uia { get; set; } = false;
+
+    /// <summary>
+    /// 是否用 EnumChildWindows + GetWindowText 读取子窗口文本。
+    /// Delphi 自绘窗口通常没有文本子窗口，实测可能为空。
+    /// </summary>
+    public bool Win32 { get; set; } = true;
+
+    /// <summary>
+    /// 是否把顶层窗口标题作为文本来源。
+    /// 对“小橙看班”这是本机唯一实测有效的信息源（如「消息提醒」「班级课表」）。
+    /// </summary>
+    public bool WindowTitle { get; set; } = true;
+}
+
+/// <summary>插件配置（对应 settings.json）。</summary>
+public sealed class MonitorOptions
+{
+    /// <summary>默认文件名（位于插件配置目录下）。</summary>
+    public const string FileName = "settings.json";
+
+    private const string DefaultProcessName = "inArt_PC";
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
+        ReadCommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true,
+        NumberHandling = JsonNumberHandling.AllowReadingFromString,
+        WriteIndented = true,
+    };
+
+    /// <summary>目标进程名（不含 .exe，不区分大小写）。默认 ["inArt_PC"]；留空表示不限制进程。</summary>
+    public string[] ProcessNames { get; set; } = new[] { DefaultProcessName };
+
+    /// <summary>
+    /// 目标窗口标题正则（对顶层窗口标题做 Regex 匹配，不区分大小写）。
+    /// 默认 ["消息提醒", "班级课表"]；留空表示该进程的所有顶层窗口都监控。
+    /// </summary>
+    public string[] WindowTitlePatterns { get; set; } = new[] { "消息提醒", "班级课表" };
+
+    /// <summary>轮询间隔（毫秒），默认 1500。运行时会被钳制到 [500, 60000]。</summary>
+    public int PollIntervalMs { get; set; } = 1500;
+
+    /// <summary>
+    /// 关键词列表。默认给出一组常见校园通知词作为示例。
+    /// Contains 模式下为子串；Regex 模式下每条都是一个正则表达式。
+    /// </summary>
+    public string[] Keywords { get; set; } = new[] { "消息", "提醒", "作业", "考试", "通知", "点名", "请假" };
+
+    /// <summary>关键词匹配方式：Contains（默认）/ Regex。</summary>
+    public string KeywordMatchMode { get; set; } = "Contains";
+
+    /// <summary>
+    /// 目标窗口从“不存在/不可见”变为“存在且可见”时，是否触发“窗口出现”通知。默认 true。
+    /// 对小橙看班（UIA 读不到正文）这是主要的降级触发方式。
+    /// </summary>
+    public bool TriggerOnWindowAppear { get; set; } = true;
+
+    /// <summary>
+    /// 插件启动时已经存在的窗口是否也当作“窗口出现”处理。默认 false（先建立基线，避免启动即误报）。
+    /// </summary>
+    public bool TriggerOnExistingWindows { get; set; } = false;
+
+    /// <summary>同一窗口同一文本 hash（或窗口出现事件）的冷却秒数，默认 60。</summary>
+    public int CooldownSeconds { get; set; } = 60;
+
+    /// <summary>提醒正文（Overlay）显示秒数，默认 8。</summary>
+    public int NotificationDurationSeconds { get; set; } = 8;
+
+    /// <summary>提醒遮罩（Mask）显示秒数，默认 3。</summary>
+    public int MaskDurationSeconds { get; set; } = 3;
+
+    /// <summary>文本来源开关。</summary>
+    public TextSourceOptions TextSources { get; set; } = new();
+
+    /// <summary>把数值字段钳制到安全范围、过滤空字符串项（原地修改）。</summary>
+    public void Normalize()
+    {
+        ProcessNames = NormalizeArray(ProcessNames, new[] { DefaultProcessName });
+        WindowTitlePatterns = NormalizeArray(WindowTitlePatterns, Array.Empty<string>());
+        Keywords = NormalizeArray(Keywords, Array.Empty<string>());
+
+        if (string.IsNullOrWhiteSpace(KeywordMatchMode))
+        {
+            KeywordMatchMode = "Contains";
+        }
+
+        PollIntervalMs = Math.Clamp(PollIntervalMs, 500, 60_000);
+        CooldownSeconds = Math.Clamp(CooldownSeconds, 0, 86_400);
+        NotificationDurationSeconds = Math.Clamp(NotificationDurationSeconds, 1, 600);
+        MaskDurationSeconds = Math.Clamp(MaskDurationSeconds, 1, 60);
+        TextSources ??= new TextSourceOptions();
+    }
+
+    /// <summary>实际轮询间隔（钳制后）。</summary>
+    public int GetPollIntervalMs() => Math.Clamp(PollIntervalMs, 500, 60_000);
+
+    /// <summary>关键词匹配方式（大小写不敏感；未知值退化为 Contains）。</summary>
+    public KeywordMatchKind ResolveKeywordMatchMode()
+    {
+        return string.Equals(KeywordMatchMode, "Regex", StringComparison.OrdinalIgnoreCase)
+            ? KeywordMatchKind.Regex
+            : KeywordMatchKind.Contains;
+    }
+
+    /// <summary>从插件配置目录加载配置；任何异常都回落到默认值（不抛出）。</summary>
+    public static MonitorOptions Load(string? pluginConfigFolder)
+    {
+        var fallback = new MonitorOptions();
+        fallback.Normalize();
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(pluginConfigFolder))
+            {
+                PluginLog.Warn("插件配置目录为空，使用默认配置。");
+                return fallback;
+            }
+
+            var path = Path.Combine(pluginConfigFolder, FileName);
+            if (!File.Exists(path))
+            {
+                var saved = fallback.TrySave(pluginConfigFolder);
+                PluginLog.Info($"未找到配置文件，已写入默认配置（success={saved}）：{path}");
+                return fallback;
+            }
+
+            var json = File.ReadAllText(path);
+            var loaded = JsonSerializer.Deserialize<MonitorOptions>(json, JsonOptions);
+            if (loaded is null)
+            {
+                PluginLog.Warn($"配置文件内容为空，使用默认配置：{path}");
+                return fallback;
+            }
+
+            loaded.Normalize();
+            PluginLog.Info($"已加载配置：{path}");
+            return loaded;
+        }
+        catch (Exception ex)
+        {
+            PluginLog.Error($"加载配置文件失败，使用默认配置（配置目录：{pluginConfigFolder}）", ex);
+            return fallback;
+        }
+    }
+
+    /// <summary>把当前配置写回插件配置目录；失败只记日志并返回 false。</summary>
+    public bool TrySave(string? pluginConfigFolder)
+    {
+        if (string.IsNullOrWhiteSpace(pluginConfigFolder))
+        {
+            return false;
+        }
+
+        try
+        {
+            Directory.CreateDirectory(pluginConfigFolder);
+            var path = Path.Combine(pluginConfigFolder, FileName);
+            File.WriteAllText(path, JsonSerializer.Serialize(this, JsonOptions), new UTF8Encoding(false));
+            return true;
+        }
+        catch (Exception ex)
+        {
+            PluginLog.Warn("写入配置文件失败：" + ex.Message);
+            return false;
+        }
+    }
+
+    private static string[] NormalizeArray(string[]? values, string[] fallback)
+    {
+        if (values is null)
+        {
+            return fallback;
+        }
+
+        var result = new List<string>(values.Length);
+        foreach (var value in values)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                continue;
+            }
+
+            var trimmed = value.Trim();
+            if (!result.Exists(existing => string.Equals(existing, trimmed, StringComparison.OrdinalIgnoreCase)))
+            {
+                result.Add(trimmed);
+            }
+        }
+
+        // 允许显式配置为空数组（例如“不限制进程/不按关键词触发”），此时不回落默认值。
+        return result.ToArray();
+    }
+}

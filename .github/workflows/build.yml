@@ -1,0 +1,125 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# XiaoChengLink（小橙看班联动）· ClassIsland 2.1 插件 CI
+#
+# 仓库布局约定：本仓库根目录 = 插件目录（XiaoChengLink.csproj 在仓库根），
+#               因此下面的 cipx/、bin/ 等路径都相对仓库根。
+#
+# 触发：push（任意分支 + v* 标签）· pull_request · 手动 workflow_dispatch
+# 产物：cipx/XiaoChengLink.cipx（ClassIsland 插件包，本质是 zip；由
+#       ClassIsland.PluginSdk 的 CreateCipx Target 在 dotnet build 后生成）
+# 发版：推送 v* 标签时自动创建 GitHub Release 并附上 .cipx
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Build & Release
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+# 创建 GitHub Release 需要 contents: write；fork 来的 PR 会被 GitHub 自动降级为只读。
+permissions:
+  contents: write
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+
+jobs:
+  build:
+    name: Build .cipx
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      # 构建前先交代环境与目录：出问题时能快速分清是仓库结构问题还是编译问题。
+      - name: Show environment & workspace
+        shell: pwsh
+        run: |
+          dotnet --info
+          Write-Host ''
+          Write-Host '=== 仓库根目录 ==='
+          Get-ChildItem -Force | Select-Object Mode, Length, Name | Format-Table -AutoSize
+          Write-Host '=== 构建前已有的 *.cipx（正常情况下为空）==='
+          $existing = @(Get-ChildItem -Recurse -Filter *.cipx -ErrorAction SilentlyContinue)
+          if ($existing.Count -eq 0) {
+            Write-Host '(无)'
+          } else {
+            $existing | ForEach-Object { Write-Host $_.FullName }
+          }
+
+      - name: Restore
+        shell: pwsh
+        run: dotnet restore XiaoChengLink.csproj
+
+      # CreateCipx=true 时，ClassIsland.PluginSdk.targets 在 Build 之后把
+      # bin/Release/net8.0-windows/ 压成 ./cipx/XiaoChengLink.cipx
+      # （要求输出目录里已有 manifest.yml，否则报 CISDK0001）。
+      - name: Build (Release)
+        shell: pwsh
+        run: dotnet build XiaoChengLink.csproj -c Release --no-restore
+
+      # 即使 Build 失败也执行：打印所有 *.cipx 与构建输出目录，
+      # 用来判断是「编译失败」还是「CreateCipx 没生成 / 输出目录缺 manifest.yml」。
+      - name: Post-build diagnostics (always)
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host '=== cipx 目录 ==='
+          if (Test-Path ./cipx) {
+            Get-ChildItem ./cipx -Force | Select-Object Mode, Length, Name | Format-Table -AutoSize
+          } else {
+            Write-Host '(cipx 目录不存在)'
+          }
+          Write-Host '=== 所有 *.cipx ==='
+          $existing = @(Get-ChildItem -Recurse -Filter *.cipx -ErrorAction SilentlyContinue)
+          if ($existing.Count -eq 0) {
+            Write-Host '(未生成任何 .cipx)'
+          } else {
+            $existing | ForEach-Object { Write-Host ("{0}  ({1} bytes)" -f $_.FullName, $_.Length) }
+          }
+          Write-Host '=== bin/Release/net8.0-windows 输出目录 ==='
+          Get-ChildItem -Recurse ./bin/Release/net8.0-windows -ErrorAction SilentlyContinue |
+            Select-Object FullName, Length | Format-Table -AutoSize
+
+      - name: Verify .cipx
+        shell: pwsh
+        run: |
+          $cipx = @(Get-ChildItem -Recurse -Filter *.cipx -ErrorAction SilentlyContinue)
+          if ($cipx.Count -eq 0) {
+            throw '构建成功但未找到 .cipx：请确认 csproj 里 <CreateCipx>true</CreateCipx>，且 dotnet build 的输出目录里包含 manifest.yml（否则 PluginSdk 报 CISDK0001）。'
+          }
+          Write-Host ("OK：共 {0} 个 .cipx" -f $cipx.Count)
+          $cipx | ForEach-Object { Write-Host $_.FullName }
+
+      - name: Upload .cipx artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: XiaoChengLink-cipx
+          path: cipx/*.cipx
+          if-no-files-found: error
+          retention-days: 30
+
+      # 只有推送 v* 标签时才发版（如 v1.0.0、v1.1.0-beta）。
+      - name: Create GitHub Release (v* tag only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          files: cipx/*.cipx
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
