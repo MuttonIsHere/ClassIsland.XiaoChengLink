@@ -77,6 +77,10 @@ public sealed class XiaoChengLinkSettingsPage : SettingsPageBase
     private NumericUpDown? _cooldownBox;
     private NumericUpDown? _visualThresholdBox;
     private NumericUpDown? _throttleBox;
+    private CheckBox? _readBodyCheck;
+    private TextBox? _dbPathBox;
+    private NumericUpDown? _freshSecondsBox;
+    private NumericUpDown? _bodyMaxCharsBox;
     private ComboBox? _matchModeCombo;
     private CheckBox? _triggerOnAppearCheck;
     private TextBlock? _statusText;
@@ -325,6 +329,62 @@ public sealed class XiaoChengLinkSettingsPage : SettingsPageBase
             "觉得弹得太频繁 → 调大（如 20–60）；希望同一时间多条都弹 → 调小或设为 0（0=关闭节流）。" +
             "保存后从下一轮扫描起生效。"));
 
+        // 9) 消息正文（本地数据库）
+        _readBodyCheck = new CheckBox
+        {
+            Content = "从本地数据库读取消息正文（推荐；全屏播报/消息提醒的正文来源）",
+            IsChecked = _options.ReadMessageBodyFromDatabase,
+            Margin = new Thickness(0, 4, 0, 8),
+        };
+        root.Children.Add(_readBodyCheck);
+        root.Children.Add(FieldHint(
+            "小橙看班把消息/播报缓存在 Data.idb（Jet 数据库）。开启后，插件会在触发时用 32 位 PowerShell 只读查询，" +
+            "把标题/正文附到 ClassIsland 提醒里；关闭则只显示通用触发提示。"));
+
+        root.Children.Add(FieldLabel("数据库路径（留空 = 自动查找）"));
+        _dbPathBox = new TextBox
+        {
+            Text = _options.MessageDatabasePath ?? string.Empty,
+            Watermark = @"留空 = 自动从 inArt_PC.exe 目录找 Data.idb（如 D:\inArtBoard\Data.idb）",
+            Margin = new Thickness(0, 0, 0, 8),
+        };
+        root.Children.Add(_dbPathBox);
+        root.Children.Add(FieldHint(
+            "通常不用改；如果小橙看班装到其它目录、或你想读别的 Data.idb，可在这里指定完整路径。"));
+
+        root.Children.Add(FieldLabel("正文新鲜度（秒，防串台）"));
+        _freshSecondsBox = new NumericUpDown
+        {
+            Minimum = 1m,
+            Maximum = 600m,
+            Increment = 5m,
+            Value = _options.MessageBodyFreshSeconds,
+            FormatString = "0",
+            HorizontalAlignment = HorizontalAlignment.Left,
+            MinWidth = 200,
+            Margin = new Thickness(0, 0, 0, 8),
+        };
+        root.Children.Add(_freshSecondsBox);
+        root.Children.Add(FieldHint(
+            "只把触发前最近 N 秒内写入数据库的记录当作本次正文，默认 30 秒。" +
+            "全屏播报的 WelcomeWord 行只有约 14 秒生命周期，靠这个窗口+重试避免拿到旧消息；" +
+            "如果偶尔正文为空可适当调大（如 60）。"));
+
+        root.Children.Add(FieldLabel("正文最大长度（字符）"));
+        _bodyMaxCharsBox = new NumericUpDown
+        {
+            Minimum = 20m,
+            Maximum = 2000m,
+            Increment = 20m,
+            Value = _options.MessageBodyMaxChars,
+            FormatString = "0",
+            HorizontalAlignment = HorizontalAlignment.Left,
+            MinWidth = 200,
+            Margin = new Thickness(0, 0, 0, 8),
+        };
+        root.Children.Add(_bodyMaxCharsBox);
+        root.Children.Add(FieldHint("超出长度会截断并加省略号；默认 300。"));
+
         // 9) 窗口出现触发
         _triggerOnAppearCheck = new CheckBox
         {
@@ -442,12 +502,13 @@ public sealed class XiaoChengLinkSettingsPage : SettingsPageBase
                 $"模式={_options.KeywordMatchMode} 轮询={_options.PollIntervalMs}ms " +
                 $"窗口出现触发={_options.TriggerOnWindowAppear} 冷却={_options.CooldownSeconds}s " +
                 $"画面阈值={_options.VisualChangeThresholdPercent:F2}% 全局节流={_options.NotificationThrottleSeconds}s " +
+                $"正文读库={_options.ReadMessageBodyFromDatabase} 新鲜度={_options.MessageBodyFreshSeconds}s 正文长度={_options.MessageBodyMaxChars} " +
                 $"标题正则重载={scannerReloaded}");
 
             if (saved)
             {
                 SetStatus(
-                    "已保存，立即生效（标题正则已重载）。进程名/轮询间隔/冷却时间/窗口出现触发/画面变化阈值/全局节流从下一轮扫描起生效；" +
+                    "已保存，立即生效（标题正则已重载）。进程名/轮询间隔/冷却时间/窗口出现触发/画面变化阈值/全局节流/消息正文从下一轮扫描起生效；" +
                     "关键词与匹配方式需重启插件后生效。",
                     success: true);
             }
@@ -494,6 +555,19 @@ public sealed class XiaoChengLinkSettingsPage : SettingsPageBase
             _options.NotificationThrottleSeconds = (int)throttle;
         }
 
+        _options.ReadMessageBodyFromDatabase = _readBodyCheck?.IsChecked ?? _options.ReadMessageBodyFromDatabase;
+        _options.MessageDatabasePath = (_dbPathBox?.Text ?? string.Empty).Trim();
+
+        if (_freshSecondsBox?.Value is decimal freshSeconds)
+        {
+            _options.MessageBodyFreshSeconds = (int)freshSeconds;
+        }
+
+        if (_bodyMaxCharsBox?.Value is decimal bodyMaxChars)
+        {
+            _options.MessageBodyMaxChars = (int)bodyMaxChars;
+        }
+
         _options.KeywordMatchMode = _matchModeCombo?.SelectedIndex == 1 ? MatchModeRegex : MatchModeContains;
         _options.TriggerOnWindowAppear = _triggerOnAppearCheck?.IsChecked ?? _options.TriggerOnWindowAppear;
     }
@@ -533,6 +607,26 @@ public sealed class XiaoChengLinkSettingsPage : SettingsPageBase
         if (_throttleBox is not null)
         {
             _throttleBox.Value = _options.NotificationThrottleSeconds;
+        }
+
+        if (_readBodyCheck is not null)
+        {
+            _readBodyCheck.IsChecked = _options.ReadMessageBodyFromDatabase;
+        }
+
+        if (_dbPathBox is not null)
+        {
+            _dbPathBox.Text = _options.MessageDatabasePath ?? string.Empty;
+        }
+
+        if (_freshSecondsBox is not null)
+        {
+            _freshSecondsBox.Value = _options.MessageBodyFreshSeconds;
+        }
+
+        if (_bodyMaxCharsBox is not null)
+        {
+            _bodyMaxCharsBox.Value = _options.MessageBodyMaxChars;
         }
 
         if (_matchModeCombo is not null)

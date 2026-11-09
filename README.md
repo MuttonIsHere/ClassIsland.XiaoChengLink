@@ -12,7 +12,38 @@
 - 插件清单：`manifest.yml`（`apiVersion: 2.0.0.0`，2.1.0.1 加载器最低要求）
 - 状态：**可用**。已在真实 ClassIsland 2.1.0.1 上验证：插件加载成功、窗口出现/画面变化时能触发提醒，
   **并能按触发窗口类型从本地 `Data.idb` 读取对应消息正文**（v1.3.1，已实测全屏播报文字正确）；
-  带图形化设置页（进程名、标题/类名规则、关键词、轮询、冷却、**画面变化阈值**、**全局提醒节流**）。
+  带图形化设置页（进程名、标题/类名规则、关键词、轮询、冷却、**画面变化阈值**、**全局提醒节流**、**消息正文读取**）。
+
+---
+
+## 架构总览（一张图看懂）
+
+```mermaid
+flowchart LR
+    A["① Win32 窗口监控<br/>EnumWindows<br/>进程名 + 标题/类名正则"] --> B["② 画面变化检测<br/>PrintWindow → 40×40 亮度网格<br/>变化 ≥ 0.4%"]
+    B --> C{"③ 触发判定<br/>单窗口冷却 + 12s 全局节流"}
+    C -->|"未命中"| A
+    C -->|"命中"| D["④ 等 1–2 秒 / 重试 4 次<br/>重新复制实时数据库"]
+    D --> E["⑤ 32 位 PowerShell<br/>只读 Jet 库 Data.idb<br/>（64 位插件无法直读）"]
+    E --> F["⑥ 窗口类名 → 表映射<br/>FMTfrmText2Voice → WelcomeWord<br/>FMTfrmMessageCenter → 消息表组"]
+    F --> G["⑦ 30 秒新鲜度过滤<br/>只认触发前刚写入的行"]
+    G --> H["⑧ ClassIsland 提醒<br/>遮罩 + 真实正文"]
+```
+
+**每一层都是踩过坑才长出来的：**
+
+| # | 阶段 | 为什么必须这样 |
+|---|---|---|
+| ① | Win32 窗口监控 | 小橙看班是 Delphi/VCL 自绘，UI Automation/MSAA 拿不到正文；但窗口类名（`FMTfrmText2Voice` / `FMTfrmMessageCenter`）稳定可读 |
+| ② | 画面变化检测 | 「消息提醒」是常驻窗口，新消息只改画面不重建窗口；`PrintWindow` 取 40×40 亮度网格做哈希，**不做 OCR** |
+| ③ | 触发判定 | 鼠标划过/动画会误触发 → 阈值可调；程序重启会连发 → 12 秒全局节流 |
+| ④ | 等待 + 重试 | 窗口先出现、数据库后落盘（实测延迟约 2–3 秒）；触发瞬间复制的库是旧的，必须**重新复制实时库**再查 |
+| ⑤ | 32 位 PowerShell | `Microsoft.Jet.OLEDB.4.0` 只有 32 位提供程序；ClassIsland 插件是 64 位进程，直连必失败（实测 E_FAIL） |
+| ⑥ | 窗口类名 → 表映射 | 全屏播报写 `WelcomeWord`，消息提醒写 `HomeWork/ClassNotice/SchoolNotice/ParentMsg/WelcomeWord`；不按窗口区分就会串台 |
+| ⑦ | 30 秒新鲜度 | `WelcomeWord` 的播报行**约 14 秒后就被删除**；只取“最新一条”会拿到旧消息，必须限定“触发前 30 秒内” |
+| ⑧ | ClassIsland 提醒 | 通过插件自己的 `NotificationProviderBase` 发出，正文带上真实标题/内容 |
+
+> 安全边界：只读（窗口枚举 / 内存截图 / 只读复制数据库），不注入、不修改小橙看班进程、不上传任何数据。
 
 ---
 
@@ -347,9 +378,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build-env\verify-plu
 插件注册了自己的 `SettingsPage`（`src/Settings/XiaoChengLinkSettingsPage.cs`，继承
 `ClassIsland.Core.Abstractions.Controls.SettingsPageBase`，用**纯 C# 构建 Avalonia 控件**，无 `.axaml`）。
 可配置：`processNames`、`windowTitlePatterns`、`keywords`、`keywordMatchMode`、`pollIntervalMs`、
-`cooldownSeconds`、`triggerOnWindowAppear`；点击「保存并应用」会写回
-`<PluginConfigFolder>/settings.json` 并**热重载标题正则**（其余字段下一轮轮询生效；关键词/匹配方式
-需要重启插件生效——如实标注，后续可给 `KeywordMatcher` 加 Reload）。
+`cooldownSeconds`、`triggerOnWindowAppear`、**`visualChangeThresholdPercent`**、**`notificationThrottleSeconds`**，
+以及消息正文相关：**从本地数据库读取正文**、数据库路径、**正文新鲜度（秒）**、正文最大长度；
+点击「保存并应用」会写回 `<PluginConfigFolder>/settings.json` 并**热重载标题正则**
+（其余字段下一轮轮询生效；关键词/匹配方式需要重启插件生效——如实标注，后续可给 `KeywordMatcher` 加 Reload）。
 
 > 实现细节与后续 XAML 化升级路径见 `src/Settings/README-SETTINGS.md`。
 > **真机注意**：设置页在设置窗口中是否正常显示、保存后热生效效果仍需实际打开设置窗口确认
