@@ -82,6 +82,49 @@ public sealed class MonitorOptions
     /// </summary>
     public string[] WindowTitlePatterns { get; set; } = new[] { "消息提醒", "班级课表" };
 
+    /// <summary>
+    /// 目标窗口**类名**正则（对 GetClassName 结果匹配，不区分大小写）。
+    /// 对 Delphi/VCL 程序（如小橙看班）尤其有用：很多通知/弹出窗体标题为空或标题不变，
+    /// 但类名带稳定前缀（FMTfrmXxx / TFormXxx / TfrmXxx）。默认匹配这三类前缀。
+    /// 标题与类名是“或”关系；两者都为空 = 该进程所有顶层窗口都监控。
+    /// </summary>
+    public string[] WindowClassPatterns { get; set; } = new[] { "^FMTfrm", "^TForm", "^Tfrm" };
+
+    /// <summary>
+    /// 要忽略的窗口类名正则（不参与任何触发）。默认忽略小橙看班的托盘图标/隐藏应用窗，
+    /// 避免程序启动时图标窗口出现造成误报；标题/类名正则仍可单独配置。
+    /// </summary>
+    public string[] IgnoreWindowClassPatterns { get; set; } = new[] { "^FMTfrmIcon$", "^TfrmTrayIcon$", "^TFMAppClass$" };
+
+    /// <summary>
+    /// 关键词是否也匹配“窗口标题”。默认 false：小橙看班标题恒为「消息提醒」，
+    /// 标题匹配关键词会在每次新窗口出现时误报；关键词应只匹配 UIA/子窗口等真实文本。
+    /// 对其它程序如需标题关键词匹配可改为 true。
+    /// </summary>
+    public bool KeywordMatchWindowTitle { get; set; } = false;
+
+    /// <summary>
+    /// 全局提醒节流（秒）：任一提醒发出后，此时长内不再发下一条，避免程序重启/多窗口出现时
+    /// 连发多条提醒。默认 12 秒；0 = 关闭。
+    /// </summary>
+    public int NotificationThrottleSeconds { get; set; } = 12;
+
+    /// <summary>
+    /// 是否启用“界面内容变化”触发（对可见窗口做截图哈希，不做 OCR）。
+    /// 小橙看班的「消息提醒」窗口是常驻窗口、正文自绘且 UIA 读不到，窗口不消失时只能靠
+    /// 画面变化（如未读数字/内容刷新）来判定“有新消息”。默认 true。
+    /// </summary>
+    public bool TriggerOnVisualChange { get; set; } = true;
+
+    /// <summary>画面变化判定阈值：采样网格中亮度差超限的像素占比（百分比）。默认 0.4（即 0.4%）。</summary>
+    public double VisualChangeThresholdPercent { get; set; } = 0.4;
+
+    /// <summary>参与画面变化判定的最小窗口面积（像素）：太小的图标/提示窗不参与，避免误报。默认 10000。</summary>
+    public int VisualChangeMinAreaPixels { get; set; } = 10000;
+
+    /// <summary>扫描诊断日志间隔（秒）；0 = 关闭。默认 30 秒打印一次扫描统计，便于排查“没触发”。</summary>
+    public int DiagnosticLogIntervalSeconds { get; set; } = 30;
+
     /// <summary>轮询间隔（毫秒），默认 1500。运行时会被钳制到 [500, 60000]。</summary>
     public int PollIntervalMs { get; set; } = 1500;
 
@@ -122,7 +165,14 @@ public sealed class MonitorOptions
     {
         ProcessNames = NormalizeArray(ProcessNames, new[] { DefaultProcessName });
         WindowTitlePatterns = NormalizeArray(WindowTitlePatterns, Array.Empty<string>());
+        WindowClassPatterns = NormalizeArray(WindowClassPatterns, Array.Empty<string>());
+        IgnoreWindowClassPatterns = NormalizeArray(IgnoreWindowClassPatterns, Array.Empty<string>());
         Keywords = NormalizeArray(Keywords, Array.Empty<string>());
+
+        VisualChangeThresholdPercent = Math.Clamp(VisualChangeThresholdPercent, 0.01, 50.0);
+        VisualChangeMinAreaPixels = Math.Clamp(VisualChangeMinAreaPixels, 100, 4_000_000);
+        DiagnosticLogIntervalSeconds = Math.Clamp(DiagnosticLogIntervalSeconds, 0, 3600);
+        NotificationThrottleSeconds = Math.Clamp(NotificationThrottleSeconds, 0, 600);
 
         if (string.IsNullOrWhiteSpace(KeywordMatchMode))
         {

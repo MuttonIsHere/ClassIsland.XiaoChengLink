@@ -80,7 +80,17 @@ public sealed class WindowScanner
 
     /// <summary>标题正则的当前快照（不可变数组；ReloadTitlePatterns 整体替换，读侧加锁取引用）。</summary>
     private Regex[] _titlePatterns = Array.Empty<Regex>();
+
+    /// <summary>窗口类名正则的当前快照（Delphi/VCL 常有无标题或标题不变的弹出窗体，靠类名匹配）。</summary>
+    private Regex[] _classPatterns = Array.Empty<Regex>();
+
+    /// <summary>要忽略的窗口类名正则（默认忽略托盘图标/隐藏应用窗）。</summary>
+    private Regex[] _ignoreClassPatterns = Array.Empty<Regex>();
+
     private readonly object _titlePatternsGate = new();
+
+    /// <summary>最近一次 Scan() 枚举到的顶层窗口总数（诊断用）。</summary>
+    public int LastEnumWindowsCount { get; private set; }
 
     public WindowScanner(MonitorOptions options)
     {
@@ -105,6 +115,8 @@ public sealed class WindowScanner
             PluginLog.Error("EnumWindows 调用失败", ex);
             return Array.Empty<WindowSnapshot>();
         }
+
+        LastEnumWindowsCount = handles.Count;
 
         var result = new List<WindowSnapshot>(handles.Count);
         foreach (var handle in handles)
@@ -187,12 +199,12 @@ public sealed class WindowScanner
         }
 
         var title = ReadWindowText(handle, MaxWindowTitleChars);
-        if (!IsTitleAllowed(title))
+        var className = ReadClassName(handle);
+        if (!IsWindowAllowed(title, className))
         {
             return null;
         }
 
-        var className = ReadClassName(handle);
         var visible = IsWindowVisible(handle);
         var hasRect = GetWindowRect(handle, out var rect);
 
@@ -212,49 +224,68 @@ public sealed class WindowScanner
     }
 
     /// <summary>
-    /// 按当前 <see cref="MonitorOptions.WindowTitlePatterns"/> 重新编译窗口标题正则（线程安全）。
-    /// 由构造函数调用一次；设置页保存后再次调用即可让新的标题规则立即生效（热重载）。
+    /// 按当前 <see cref="MonitorOptions.WindowTitlePatterns"/> / <see cref="MonitorOptions.WindowClassPatterns"/>
+    /// 重新编译窗口标题与类名正则（线程安全）。
+    /// 由构造函数调用一次；设置页保存后再次调用即可让新的匹配规则立即生效（热重载）。
     /// 编译失败的单条正则会被跳过并记 WARN；整体异常只记 ERROR，保留原有规则，绝不抛出。
-    /// 空列表语义不变：不做标题过滤（该进程所有顶层窗口都监控）。
+    /// 空列表语义：标题/类名都不配置则不做过滤（该进程所有顶层窗口都监控）。
     /// </summary>
     public void ReloadTitlePatterns()
     {
         try
         {
-            var patterns = _options.WindowTitlePatterns;
-            var compiled = new List<Regex>();
-            if (patterns is not null)
-            {
-                foreach (var pattern in patterns)
-                {
-                    if (string.IsNullOrWhiteSpace(pattern))
-                    {
-                        continue;
-                    }
-
-                    try
-                    {
-                        compiled.Add(new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TitleRegexTimeout));
-                    }
-                    catch (ArgumentException ex)
-                    {
-                        PluginLog.Warn($"窗口标题正则无效（已忽略 '{pattern}'）：{ex.Message}");
-                    }
-                }
-            }
+            var titlePatterns = _options.WindowTitlePatterns;
+            var classPatterns = _options.WindowClassPatterns;
+            var ignorePatterns = _options.IgnoreWindowClassPatterns;
+            var compiledTitles = CompilePatterns(titlePatterns, "窗口标题");
+            var compiledClasses = CompilePatterns(classPatterns, "窗口类名");
+            var compiledIgnores = CompilePatterns(ignorePatterns, "忽略窗口类名");
 
             // 先在锁外编译好，再在锁内整体替换引用：读侧要么看到旧快照、要么看到新快照，不会看到半成品。
             lock (_titlePatternsGate)
             {
-                _titlePatterns = compiled.ToArray();
+                _titlePatterns = compiledTitles;
+                _classPatterns = compiledClasses;
+                _ignoreClassPatterns = compiledIgnores;
             }
 
-            PluginLog.Info($"窗口标题正则已重载：{compiled.Count} 条生效（配置 {patterns?.Length ?? 0} 条）。");
+            PluginLog.Info(
+                $"窗口匹配规则已重载：标题 {compiledTitles.Length} 条（配置 {titlePatterns?.Length ?? 0} 条），" +
+                $"类名 {compiledClasses.Length} 条（配置 {classPatterns?.Length ?? 0} 条），" +
+                $"忽略类名 {compiledIgnores.Length} 条（配置 {ignorePatterns?.Length ?? 0} 条）。");
         }
         catch (Exception ex)
         {
-            PluginLog.Error("重载窗口标题正则失败（保留原有规则）", ex);
+            PluginLog.Error("重载窗口匹配规则失败（保留原有规则）", ex);
         }
+    }
+
+    private static Regex[] CompilePatterns(string[]? patterns, string kind)
+    {
+        var compiled = new List<Regex>();
+        if (patterns is null)
+        {
+            return compiled.ToArray();
+        }
+
+        foreach (var pattern in patterns)
+        {
+            if (string.IsNullOrWhiteSpace(pattern))
+            {
+                continue;
+            }
+
+            try
+            {
+                compiled.Add(new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TitleRegexTimeout));
+            }
+            catch (ArgumentException ex)
+            {
+                PluginLog.Warn($"{kind}正则无效（已忽略 '{pattern}'）：{ex.Message}");
+            }
+        }
+
+        return compiled.ToArray();
     }
 
     private bool IsProcessNameAllowed(string processName)
@@ -282,37 +313,79 @@ public sealed class WindowScanner
         return false;
     }
 
-    private bool IsTitleAllowed(string title)
+    private bool IsWindowAllowed(string title, string className)
     {
-        // 取标题正则的当前快照（设置页可能随时热重载）：只读快照，遍历期间无需持锁。
-        Regex[] patterns;
+        // 取正则快照（设置页可能随时热重载）：只读快照，遍历期间无需持锁。
+        Regex[] titlePatterns;
+        Regex[] classPatterns;
+        Regex[] ignorePatterns;
         lock (_titlePatternsGate)
         {
-            patterns = _titlePatterns;
+            titlePatterns = _titlePatterns;
+            classPatterns = _classPatterns;
+            ignorePatterns = _ignoreClassPatterns;
         }
 
-        if (patterns.Length == 0)
+        // 忽略规则优先：命中即不监控（例如托盘图标/隐藏应用窗）。
+        if (!string.IsNullOrEmpty(className))
+        {
+            foreach (var pattern in ignorePatterns)
+            {
+                try
+                {
+                    if (pattern.IsMatch(className))
+                    {
+                        return false;
+                    }
+                }
+                catch (RegexMatchTimeoutException)
+                {
+                    PluginLog.Debug("忽略类名正则匹配超时（已跳过）：" + className);
+                }
+            }
+        }
+
+        // 两者都为空 = 不过滤（该进程所有顶层窗口都监控）。
+        if (titlePatterns.Length == 0 && classPatterns.Length == 0)
         {
             return true;
         }
 
-        if (string.IsNullOrEmpty(title))
+        // 标题匹配：标题为空时不参与匹配（但类名匹配仍可命中）。
+        if (!string.IsNullOrEmpty(title))
         {
-            return false;
-        }
-
-        foreach (var pattern in patterns)
-        {
-            try
+            foreach (var pattern in titlePatterns)
             {
-                if (pattern.IsMatch(title))
+                try
                 {
-                    return true;
+                    if (pattern.IsMatch(title))
+                    {
+                        return true;
+                    }
+                }
+                catch (RegexMatchTimeoutException)
+                {
+                    PluginLog.Debug("窗口标题正则匹配超时（已跳过）：" + title);
                 }
             }
-            catch (RegexMatchTimeoutException)
+        }
+
+        // 类名匹配：Delphi/VCL 弹出窗体常常没有标题或标题不变，类名（FMTfrmXxx / TFormXxx）更稳定。
+        if (!string.IsNullOrEmpty(className))
+        {
+            foreach (var pattern in classPatterns)
             {
-                PluginLog.Debug("窗口标题正则匹配超时（已跳过）：" + title);
+                try
+                {
+                    if (pattern.IsMatch(className))
+                    {
+                        return true;
+                    }
+                }
+                catch (RegexMatchTimeoutException)
+                {
+                    PluginLog.Debug("窗口类名正则匹配超时（已跳过）：" + className);
+                }
             }
         }
 

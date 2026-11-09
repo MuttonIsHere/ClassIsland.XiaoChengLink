@@ -210,7 +210,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build-env\verify-plu
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `processNames` | string[] | `["inArt_PC"]` | 目标进程名（不含 `.exe`，不区分大小写）。留空数组 = 不限制进程（会扫描所有顶层窗口，慎用）。 |
-| `windowTitlePatterns` | string[] | `["消息提醒","班级课表"]` | 顶层窗口标题的**正则**（不区分大小写）。留空数组 = 该进程所有窗口都监控。 |
+| `windowTitlePatterns` | string[] | `["消息提醒","班级课表"]` | 顶层窗口标题的**正则**（不区分大小写）。 |
+| `windowClassPatterns` | string[] | `["^FMTfrm","^TForm","^Tfrm"]` | 顶层窗口**类名**正则。Delphi/VCL 弹出窗体常常没有标题或标题不变，类名（FMTfrmXxx/TFormXxx）更稳定；标题与类名是“或”关系。 |
+| `ignoreWindowClassPatterns` | string[] | `["^FMTfrmIcon$","^TfrmTrayIcon$","^TFMAppClass$"]` | 不参与任何触发的窗口类名（默认忽略托盘图标/隐藏应用窗，避免程序启动误报）。 |
+| `keywordMatchWindowTitle` | bool | `false` | 关键词是否也匹配窗口标题。默认 false：小橙看班标题恒为「消息提醒」，含标题会每次新窗口都误报。 |
+| `notificationThrottleSeconds` | int | `12` | 全局提醒节流：任一提醒发出后此时长内不再发下一条，避免程序重启/多窗口连发。0=关闭。 |
+| `triggerOnVisualChange` | bool | `true` | 是否启用“窗口画面变化”触发（PrintWindow 截图网格哈希，不做 OCR）。小橙看班常驻消息窗靠它感知新消息。 |
+| `visualChangeThresholdPercent` | double | `0.4` | 画面变化阈值：采样网格中亮度变化超过阈值的像素占比（%）。 |
+| `visualChangeMinAreaPixels` | int | `10000` | 参与画面变化判定的最小窗口面积；小图标窗不参与。 |
+| `diagnosticLogIntervalSeconds` | int | `30` | 扫描诊断日志间隔（秒），打印顶层窗口数/匹配窗口明细，便于排查“不触发”。 |
 | `pollIntervalMs` | int | `1500` | 轮询间隔（运行时钳制到 500–60000 ms）。 |
 | `keywords` | string[] | `["消息","提醒","作业","考试","通知","点名","请假"]` | 关键词列表。 |
 | `keywordMatchMode` | string | `"Contains"` | `Contains`（子串，不区分大小写）或 `Regex`（每条 keyword 当正则，250ms 超时）。 |
@@ -258,7 +266,34 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build-env\verify-plu
 | 3 | 一次启动连发 3 条“窗口出现”提醒 | Delphi 程序同时产生多个顶层窗口（含隐藏的「班级课表」「frmTrayIcon」） | 只对**可见**窗口判定“出现”，且同一轮最多发一条“窗口出现”提醒 |
 | 4 | 监听到目标窗口后可能卡住（UIA 路径） | 对 Delphi 自绘窗口跨进程做 UIA 调用可能长时间阻塞 | `textSources.uia` 默认改为 `false`（小橙看班本来也读不到正文）；其它程序按需开启 |
 
-### 6.2 真机提醒可见验证（已由用户完成）
+### 6.2 真机排查与修复记录（2026-11-09）
+
+**现象**：插件已加载、监控日志正常，但小橙看班出现提醒时 ClassIsland 没反应。
+
+**排查**：
+- 插件日志显示监控服务 21:03 启动且无异常，但**没有任何“本轮检测到”记录** → 扫描器虽然匹配到了窗口，却没有任何触发；
+- 用 `tools/scan-windows.ps1` 抓真实特征：进程 `inArt_PC` 的窗口为
+  `FMTfrmMessageCenter`（标题「消息提醒」，**常驻可见**）、`FMTfrmIcon`（「小橙同学」）、
+  `FMTfrmClassCourse`（「班级课表」，隐藏）、`TFMAppClass`/`TfrmTrayIcon`（隐藏）；
+- 根因：旧版只按「标题正则 + 窗口出现」触发。小橙看班的「消息提醒」是**一直存在的常驻窗口**，
+  插件启动时已在基线中；后续新消息只是**窗口内画面变化**，窗口不消失/不重建 → 永远不触发。
+
+**修复（v1.1.0）**：
+1. 新增**窗口类名匹配**（`windowClassPatterns`，默认 FMTfrm/TForm/Tfrm），无标题 Delphi 弹窗也能命中；
+2. 新增**画面变化检测**（`WindowVisualDiff`：PrintWindow → 40×40 亮度网格哈希，不做 OCR），
+   常驻窗口内容变化（如未读数字/新消息）也会触发；
+3. 新增**全局提醒节流**（`notificationThrottleSeconds=12`）+ 忽略托盘图标/隐藏应用窗类名，
+   避免程序重启时连发多条；
+4. 关键词默认**不匹配窗口标题**（避免标题恒为「消息提醒」造成每次窗口创建都误报）；
+5. 新增**扫描诊断日志**（每 30s 打印顶层窗口数/匹配窗口的标题、类名、可见性、区域）。
+
+**修复后真机验证（2026-11-09 19:28）**：
+- 基线：匹配 2 个窗口（`FMTfrmMessageCenter` 可见 + `FMTfrmClassCourse` 隐藏），画面基线已建立（40x40）；
+- 重启小橙看班后：`发现新的匹配窗口 [FMTfrmMessageCenter]` → **提醒已入队**（窗口出现）；
+  紧接着 `画面变化 0.6% > 阈值 0.4%` 被识别，但因 12s 全局节流被正确跳过 → **单次重启只发 1 条提醒**；
+- 证据：`research/e2e/fix-deploy-*`、`fix-trigger-*.png`、插件日志 `data\Config\Plugins\xiaocheng.link\logs\*.log`。
+
+### 6.3 用户手动验证（2026-11-08）
 
 修复 Avalonia 线程问题后，用户在真实 ClassIsland 2.1.0.1 上重新安装并测试：**插件能正常触发提醒**
 （“消息提醒”窗口出现时 ClassIsland 正常弹出）。此前 agent 因 ClassIsland 被 `grantUiAccess`
