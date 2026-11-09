@@ -16,6 +16,7 @@
   "readMessageBodyFromDatabase": true,
   "messageDatabasePath": "",
   "messageBodyMaxAgeSeconds": 3600,
+  "messageBodyFreshSeconds": 30,
   "messageBodyMaxChars": 300,
   "triggerOnExistingWindows": false,
   "cooldownSeconds": 60,

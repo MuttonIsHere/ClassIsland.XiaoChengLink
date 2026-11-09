@@ -137,6 +137,12 @@ public sealed class MonitorOptions
     /// <summary>只接受最近 N 秒内的消息作为正文；0 = 不限制（默认 3600 秒）。</summary>
     public int MessageBodyMaxAgeSeconds { get; set; } = 3600;
 
+    /// <summary>
+    /// 消息“新鲜度”窗口（秒）：只把触发前最近 N 秒内写入数据库的记录当作本次提醒的正文。
+    /// 全屏播报（FMTfrmText2Voice）写入 WelcomeWord 后约 14 秒删除该行，默认 30 秒可覆盖写入延迟。
+    /// </summary>
+    public int MessageBodyFreshSeconds { get; set; } = 30;
+
     /// <summary>正文最大字符数（超出截断），默认 300。</summary>
     public int MessageBodyMaxChars { get; set; } = 300;
 
@@ -190,6 +196,7 @@ public sealed class MonitorOptions
         NotificationThrottleSeconds = Math.Clamp(NotificationThrottleSeconds, 0, 600);
         MessageBodyMaxAgeSeconds = Math.Clamp(MessageBodyMaxAgeSeconds, 0, 86400);
         MessageBodyMaxChars = Math.Clamp(MessageBodyMaxChars, 20, 2000);
+        MessageBodyFreshSeconds = Math.Clamp(MessageBodyFreshSeconds, 1, 600);
 
         if (string.IsNullOrWhiteSpace(KeywordMatchMode))
         {

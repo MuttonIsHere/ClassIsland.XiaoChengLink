@@ -139,6 +139,7 @@ public sealed class WindowTextMonitor : BackgroundService
         var seenHandles = new HashSet<IntPtr>();
         var pending = new List<PendingNotification>(2);
         var matchedVisible = 0;
+        WindowSnapshot? triggerWindow = null;
 
         foreach (var window in windows)
         {
@@ -230,6 +231,12 @@ public sealed class WindowTextMonitor : BackgroundService
                 // 窗口刚出现/已触发时，重置画面基线，避免同一事件重复触发。
                 UpdateVisualBaseline(window, state);
             }
+
+            if (handled && triggerWindow is null)
+            {
+                // 记住触发本次提醒的窗口（类名用于只查对应的数据库表，避免不同类型消息串台）。
+                triggerWindow = window;
+            }
         }
 
         // 移除已消失窗口的状态，避免句柄复用导致误判。
@@ -259,12 +266,17 @@ public sealed class WindowTextMonitor : BackgroundService
         LocalMessage? latestMessage = null;
         if (pending.Count > 0 && _options.ReadMessageBodyFromDatabase)
         {
-            latestMessage = _messageReader.TryGetLatestMessage();
+            latestMessage = _messageReader.TryGetLatestMessage(triggerWindow?.ClassName, triggerWindow?.Title);
             if (latestMessage is not null)
             {
                 PluginLog.Info(
                     $"数据库正文：table={latestMessage.Table} time={latestMessage.Time} " +
-                    $"title=「{Truncate(latestMessage.Title, 60)}」 content=「{Truncate(latestMessage.Content, 80)}」");
+                    $"title=「{Truncate(latestMessage.Title, 60)}」 content=「{Truncate(latestMessage.Content, 80)}」" +
+                    $"（触发窗口类={triggerWindow?.ClassName} 标题={triggerWindow?.Title}）");
+            }
+            else
+            {
+                PluginLog.Debug($"数据库正文：未找到与窗口类 {triggerWindow?.ClassName} 对应的新鲜消息（退回通用提示）。");
             }
         }
 

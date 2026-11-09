@@ -11,7 +11,7 @@
 - 目标宿主：ClassIsland **2.1.0.1**（`ClassIsland.Core.dll` AssemblyVersion 2.1.0.1）
 - 插件清单：`manifest.yml`（`apiVersion: 2.0.0.0`，2.1.0.1 加载器最低要求）
 - 状态：**可用**。已在真实 ClassIsland 2.1.0.1 上验证：插件加载成功、窗口出现/画面变化时能触发提醒，
-  **并能从本地 `Data.idb` 读取最新消息正文显示在提醒里**（v1.3.0）；
+  **并能按触发窗口类型从本地 `Data.idb` 读取对应消息正文**（v1.3.1，已实测全屏播报文字正确）；
   带图形化设置页（进程名、标题/类名规则、关键词、轮询、冷却、**画面变化阈值**、**全局提醒节流**）。
 
 ---
@@ -132,14 +132,26 @@ D:\inArtBoard\Data.idb   （Microsoft Jet / Access 格式；小橙看班运行�
 1. 以共享读方式把 `Data.idb` 复制到临时目录（不影响小橙看班使用）；
 2. 调用随插件附带的 `read-message.ps1`（由 **32 位 PowerShell** 执行，因为 Jet 只有 32 位提供程序；
    ClassIsland 插件本身是 64 位进程，无法直接打开）；
-3. 从所有消息表里选**时间最新、且有标题/正文**的那一条；
+3. **先按触发窗口的类名/标题选择对应的表**（避免不同窗口的数据串台），再只接受**最近 30 秒内**
+   写入的记录；如果触发瞬间还没落盘，会重新复制实时数据库并重试（最多 4 次，约 1 秒一次）；
 4. 把它附加到提醒正文，例如：
 
 ```
-检测到「消息提醒」窗口出现（进程 inArt_PC，类名 FMTfrmMessageCenter）
-【HomeWork】11月9日（周一）
-测试
+检测到「全屏播报」窗口出现（进程 inArt_PC，类名 FMTfrmText2Voice）
+【WelcomeWord】钱昶翰
+最终测试XYZ
 ```
+
+**窗口类名 → 数据表（实测）**：
+
+| 窗口 | 证据 | 查询的表 |
+|---|---|---|
+| `FMTfrmText2Voice`（全屏播报） | 2026-11-09 22:27 实测：播报瞬间 `WelcomeWord` 插入一行（`Content=测试`、`Addtime=22:27:02`），约 14 秒后该行被删除 | **`WelcomeWord`** |
+| `FMTfrmMessageCenter`（消息提醒） | 普通消息汇总 | `HomeWork` / `ClassNotice` / `SchoolNotice` / `ParentMsg` / `WelcomeWord`（按新鲜度取最新） |
+| 其他窗口 | 兜底 | 所有消息表（同样只认最近 30 秒） |
+
+> 全屏播报的 `WelcomeWord` 行是**临时行**（播报结束后删除），所以必须“触发后立刻读 + 重试”，
+> 不能慢慢查，也不能只按“最新一条”跨表挑（那会把旧消息误当成本次播报）。
 
 相关配置（一般不須改，默认开启）：
 
@@ -147,7 +159,8 @@ D:\inArtBoard\Data.idb   （Microsoft Jet / Access 格式；小橙看班运行�
 |---|---|---|
 | `readMessageBodyFromDatabase` | `true` | 是否从本地数据库读取正文；改成 `false` 就只显示通用提示 |
 | `messageDatabasePath` | `""` | 留空 = 自动从运行中的 `inArt_PC.exe` 所在目录找 `Data.idb` |
-| `messageBodyMaxAgeSeconds` | `3600` | 只接受最近 N 秒内的消息；0 = 不限制 |
+| `messageBodyFreshSeconds` | `30` | 只把触发前最近 N 秒内写入的记录当作本次正文（**防串台的关键**）；全屏播报行约 14 秒后会被删除 |
+| `messageBodyMaxAgeSeconds` | `3600` | 兼容旧配置（当前版本以 `messageBodyFreshSeconds` 为准） |
 | `messageBodyMaxChars` | `300` | 正文最大长度，超出截断 |
 
 **读取失败怎么办**：插件会自动退回通用提示（不影响触发）。排查看插件日志里有没有

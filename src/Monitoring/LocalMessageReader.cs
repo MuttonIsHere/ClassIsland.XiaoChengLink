@@ -62,7 +62,9 @@ public sealed class LocalMessageReader
     }
 
     /// <summary>尝试读取最新消息；失败/关闭/无数据时返回 null（绝不抛出）。</summary>
-    public LocalMessage? TryGetLatestMessage()
+    /// <param name="windowClass">触发本次提醒的窗口类名（用于只查对应表）。</param>
+    /// <param name="windowTitle">触发本次提醒的窗口标题（备用判断）。</param>
+    public LocalMessage? TryGetLatestMessage(string? windowClass = null, string? windowTitle = null)
     {
         if (!_options.ReadMessageBodyFromDatabase)
         {
@@ -102,7 +104,8 @@ public sealed class LocalMessageReader
                 return null;
             }
 
-            var json = RunReader(scriptPath, tempDb);
+            var tables = ResolveTablesForWindow(windowClass, windowTitle);
+            var json = RunReader(scriptPath, tempDb, sourceDb, tables);
             if (string.IsNullOrWhiteSpace(json))
             {
                 return null;
@@ -122,6 +125,39 @@ public sealed class LocalMessageReader
                 try { File.Delete(tempDb); } catch { }
             }
         }
+    }
+
+    /// <summary>
+    /// 窗口类名/标题 → 只查询对应的数据库表（避免不同窗口的数据串台）。
+    /// 已实测：FMTfrmText2Voice（全屏播报）写入 WelcomeWord 表（Content=播报文字，Addtime=插入时间，
+    /// 播报结束后行会被删除）；FMTfrmMessageCenter（消息提醒）是普通消息汇总。
+    /// 返回空字符串表示不限制表。
+    /// </summary>
+    private static string ResolveTablesForWindow(string? windowClass, string? windowTitle)
+    {
+        var cls = windowClass ?? string.Empty;
+        var title = windowTitle ?? string.Empty;
+
+        if (cls.IndexOf("Text2Voice", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            title.IndexOf("全屏播报", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            title.IndexOf("播报", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return "WelcomeWord";
+        }
+
+        if (cls.IndexOf("MessageCenter", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            title.IndexOf("消息提醒", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return "HomeWork,ClassNotice,SchoolNotice,ParentMsg,WelcomeWord";
+        }
+
+        if (cls.IndexOf("ClassCourse", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            // 班级课表窗口没有“消息正文”，不读库（返回不存在的表名会让脚本得到空结果）。
+            return "__none__";
+        }
+
+        return string.Empty;
     }
 
     private string? ResolveScriptPath()
@@ -237,7 +273,7 @@ public sealed class LocalMessageReader
         }
     }
 
-    private string? RunReader(string scriptPath, string dbPath)
+    private string? RunReader(string scriptPath, string dbPath, string liveDbPath, string tables)
     {
         var powershell = Resolve32BitPowerShell();
         if (powershell is null)
@@ -245,8 +281,14 @@ public sealed class LocalMessageReader
             return null;
         }
 
+        var freshSeconds = Math.Max(1, _options.MessageBodyFreshSeconds);
         var arguments = $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{scriptPath}\" " +
-                        $"-DbPath \"{dbPath}\" -MaxAgeSeconds {Math.Max(0, _options.MessageBodyMaxAgeSeconds)}";
+                        $"-DbPath \"{dbPath}\" -FreshSeconds {freshSeconds} " +
+                        $"-LiveDbPath \"{liveDbPath}\"";
+        if (!string.IsNullOrWhiteSpace(tables))
+        {
+            arguments += $" -Tables \"{tables}\"";
+        }
 
         using var process = new Process
         {
