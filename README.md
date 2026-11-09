@@ -10,7 +10,8 @@
 
 - 目标宿主：ClassIsland **2.1.0.1**（`ClassIsland.Core.dll` AssemblyVersion 2.1.0.1）
 - 插件清单：`manifest.yml`（`apiVersion: 2.0.0.0`，2.1.0.1 加载器最低要求）
-- 状态：**可用**。已在真实 ClassIsland 2.1.0.1 上验证：插件加载成功、窗口出现/画面变化时能触发提醒；
+- 状态：**可用**。已在真实 ClassIsland 2.1.0.1 上验证：插件加载成功、窗口出现/画面变化时能触发提醒，
+  **并能从本地 `Data.idb` 读取最新消息正文显示在提醒里**（v1.3.0）；
   带图形化设置页（进程名、标题/类名规则、关键词、轮询、冷却、**画面变化阈值**、**全局提醒节流**）。
 
 ---
@@ -118,10 +119,45 @@
 | 新消息来了不弹 | 调小 **画面变化阈值**（如 0.2）；若本来是 0.4 且日志里没有 `画面变化触发`，说明变化比例低于阈值 |
 | 想临时关闭 | 把 **画面变化阈值** 调到 50（或把全局节流调到 600 秒），或者直接禁用插件 |
 
-### 0.8 安全边界
+### 0.8 消息正文从哪里来（本地数据库）
 
-插件只做只读操作：枚举窗口、读窗口标题/类名、`PrintWindow` 截取目标窗口画面（内存中处理），
-**不注入、不修改小橙看班进程、不破解、不绕过权限、不上传任何画面**。
+只靠截图/窗口标题拿不到小橙看班的正文，所以插件还会**只读**它的本地 Jet 数据库：
+
+```
+D:\inArtBoard\Data.idb   （Microsoft Jet / Access 格式；小橙看班运行时会写它）
+表：HomeWork / ClassNotice / SchoolNotice / ParentMsg / WelcomeWord / ScheduledTask / ExamClock …
+```
+
+触发提醒时，插件会：
+1. 以共享读方式把 `Data.idb` 复制到临时目录（不影响小橙看班使用）；
+2. 调用随插件附带的 `read-message.ps1`（由 **32 位 PowerShell** 执行，因为 Jet 只有 32 位提供程序；
+   ClassIsland 插件本身是 64 位进程，无法直接打开）；
+3. 从所有消息表里选**时间最新、且有标题/正文**的那一条；
+4. 把它附加到提醒正文，例如：
+
+```
+检测到「消息提醒」窗口出现（进程 inArt_PC，类名 FMTfrmMessageCenter）
+【HomeWork】11月9日（周一）
+测试
+```
+
+相关配置（一般不須改，默认开启）：
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `readMessageBodyFromDatabase` | `true` | 是否从本地数据库读取正文；改成 `false` 就只显示通用提示 |
+| `messageDatabasePath` | `""` | 留空 = 自动从运行中的 `inArt_PC.exe` 所在目录找 `Data.idb` |
+| `messageBodyMaxAgeSeconds` | `3600` | 只接受最近 N 秒内的消息；0 = 不限制 |
+| `messageBodyMaxChars` | `300` | 正文最大长度，超出截断 |
+
+**读取失败怎么办**：插件会自动退回通用提示（不影响触发）。排查看插件日志里有没有
+`数据库正文：table=... title=... content=...`；如果没有，检查 `read-message.ps1` 是否在插件目录下、
+以及 `Data.idb` 是否在小橙看班目录。数据库只在本机读取、不写入、不上传。
+
+### 0.9 安全边界
+
+插件只做只读操作：枚举窗口、读窗口标题/类名、`PrintWindow` 截取目标窗口画面（内存中处理）、
+只读复制本地数据库并用随附脚本查询；**不注入、不修改小橙看班进程、不破解、不绕过权限、不上传任何数据**。
 
 ---
 
@@ -323,6 +359,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build-env\verify-plu
 | `visualChangeThresholdPercent` | double | `0.4` | 画面变化阈值：采样网格中亮度变化超过阈值的像素占比（%）。 |
 | `visualChangeMinAreaPixels` | int | `10000` | 参与画面变化判定的最小窗口面积；小图标窗不参与。 |
 | `diagnosticLogIntervalSeconds` | int | `30` | 扫描诊断日志间隔（秒），打印顶层窗口数/匹配窗口明细，便于排查“不触发”。 |
+| `readMessageBodyFromDatabase` | bool | `true` | 是否从本地 `Data.idb` 读取最新消息正文附加到提醒（见 §0.8）。 |
+| `messageDatabasePath` | string | `""` | 数据库路径；留空 = 自动从 inArt_PC 进程目录找 `Data.idb`。 |
+| `messageBodyMaxAgeSeconds` | int | `3600` | 只接受最近 N 秒内的消息作为正文；0 = 不限制。 |
+| `messageBodyMaxChars` | int | `300` | 正文最大长度（超出截断）。 |
 | `pollIntervalMs` | int | `1500` | 轮询间隔（运行时钳制到 500–60000 ms）。 |
 | `keywords` | string[] | `["消息","提醒","作业","考试","通知","点名","请假"]` | 关键词列表。 |
 | `keywordMatchMode` | string | `"Contains"` | `Contains`（子串，不区分大小写）或 `Regex`（每条 keyword 当正则，250ms 超时）。 |

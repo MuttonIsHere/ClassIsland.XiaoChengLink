@@ -46,6 +46,16 @@ public sealed class XiaoChengLinkPlugin : PluginBase
         {
             // 1) 日志（写入 PluginConfigFolder/logs/yyyyMMdd.log）
             PluginLog.Init(PluginConfigFolder);
+            // 供不依赖 PluginBase 实例的组件（如 LocalMessageReader）获取插件目录/配置目录。
+            PluginPaths.PluginConfigFolder = PluginConfigFolder;
+            try
+            {
+                PluginPaths.PluginFolder = Info?.PluginFolderPath;
+            }
+            catch
+            {
+                PluginPaths.PluginFolder = null;
+            }
 
             // 2) 配置：<PluginConfigFolder>/settings.json，缺失时写默认值
             var options = MonitorOptions.Load(PluginConfigFolder);
@@ -58,6 +68,9 @@ public sealed class XiaoChengLinkPlugin : PluginBase
             services.AddSingleton<WindowScanner>();
             services.AddSingleton<UiaTextReader>();
             services.AddSingleton<KeywordMatcher>();
+
+            // 本地数据库正文读取器（调用 32 位 PowerShell 辅助脚本读取 Data.idb）
+            services.AddSingleton<LocalMessageReader>();
 
             // 5) 提醒提供方：注册元数据 + 可注入单例 + IHostedService（宿主启动时构造/启动）
             AddSharedNotificationProvider<XiaoChengNotificationProvider>(services);

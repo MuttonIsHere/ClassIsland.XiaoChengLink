@@ -125,6 +125,21 @@ public sealed class MonitorOptions
     /// <summary>扫描诊断日志间隔（秒）；0 = 关闭。默认 30 秒打印一次扫描统计，便于排查“没触发”。</summary>
     public int DiagnosticLogIntervalSeconds { get; set; } = 30;
 
+    /// <summary>
+    /// 是否从“小橙看班”本地数据库（Data.idb）读取最新消息正文，附加到 ClassIsland 提醒中。默认 true。
+    /// 若读取失败（数据库不存在/版本变化/权限问题），自动退回通用提示，不影响触发。
+    /// </summary>
+    public bool ReadMessageBodyFromDatabase { get; set; } = true;
+
+    /// <summary>本地数据库路径；留空 = 自动从运行中的 inArt_PC 进程目录查找 Data.idb。</summary>
+    public string MessageDatabasePath { get; set; } = string.Empty;
+
+    /// <summary>只接受最近 N 秒内的消息作为正文；0 = 不限制（默认 3600 秒）。</summary>
+    public int MessageBodyMaxAgeSeconds { get; set; } = 3600;
+
+    /// <summary>正文最大字符数（超出截断），默认 300。</summary>
+    public int MessageBodyMaxChars { get; set; } = 300;
+
     /// <summary>轮询间隔（毫秒），默认 1500。运行时会被钳制到 [500, 60000]。</summary>
     public int PollIntervalMs { get; set; } = 1500;
 
@@ -173,6 +188,8 @@ public sealed class MonitorOptions
         VisualChangeMinAreaPixels = Math.Clamp(VisualChangeMinAreaPixels, 100, 4_000_000);
         DiagnosticLogIntervalSeconds = Math.Clamp(DiagnosticLogIntervalSeconds, 0, 3600);
         NotificationThrottleSeconds = Math.Clamp(NotificationThrottleSeconds, 0, 600);
+        MessageBodyMaxAgeSeconds = Math.Clamp(MessageBodyMaxAgeSeconds, 0, 86400);
+        MessageBodyMaxChars = Math.Clamp(MessageBodyMaxChars, 20, 2000);
 
         if (string.IsNullOrWhiteSpace(KeywordMatchMode))
         {

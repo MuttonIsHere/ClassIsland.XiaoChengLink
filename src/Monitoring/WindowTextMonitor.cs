@@ -40,6 +40,7 @@ public sealed class WindowTextMonitor : BackgroundService
     private readonly UiaTextReader _uiaTextReader;
     private readonly KeywordMatcher _keywordMatcher;
     private readonly ClassIslandNotifier _notifier;
+    private readonly LocalMessageReader _messageReader;
 
     /// <summary>窗口句柄 -> 上一轮的可见性/文本哈希/画面快照。</summary>
     private readonly Dictionary<IntPtr, WindowState> _windowStates = new();
@@ -59,13 +60,15 @@ public sealed class WindowTextMonitor : BackgroundService
         WindowScanner scanner,
         UiaTextReader uiaTextReader,
         KeywordMatcher keywordMatcher,
-        ClassIslandNotifier notifier)
+        ClassIslandNotifier notifier,
+        LocalMessageReader messageReader)
     {
         _options = options;
         _scanner = scanner;
         _uiaTextReader = uiaTextReader;
         _keywordMatcher = keywordMatcher;
         _notifier = notifier;
+        _messageReader = messageReader;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -252,11 +255,30 @@ public sealed class WindowTextMonitor : BackgroundService
             PluginLog.Info($"本轮检测到 {pending.Count} 条待发提醒（匹配窗口 {windows.Count} 个、可见 {matchedVisible} 个）。");
         }
 
+        // 从本地数据库读取最新消息正文（只在有提醒要发时才执行，避免轮询开销）。
+        LocalMessage? latestMessage = null;
+        if (pending.Count > 0 && _options.ReadMessageBodyFromDatabase)
+        {
+            latestMessage = _messageReader.TryGetLatestMessage();
+            if (latestMessage is not null)
+            {
+                PluginLog.Info(
+                    $"数据库正文：table={latestMessage.Table} time={latestMessage.Time} " +
+                    $"title=「{Truncate(latestMessage.Title, 60)}」 content=「{Truncate(latestMessage.Content, 80)}」");
+            }
+        }
+
         foreach (var notification in pending)
         {
-            var sent = await _notifier.SendAsync(notification.OverlayText, notification.MaskText, cancellationToken).ConfigureAwait(false);
+            var overlay = notification.OverlayText;
+            if (latestMessage is not null)
+            {
+                overlay = AppendMessageBody(overlay, latestMessage);
+            }
+
+            var sent = await _notifier.SendAsync(overlay, notification.MaskText, cancellationToken).ConfigureAwait(false);
             PluginLog.Info(sent
-                ? $"提醒已入队：mask=「{notification.MaskText}」正文=「{Truncate(notification.OverlayText, 80)}」"
+                ? $"提醒已入队：mask=「{notification.MaskText}」正文=「{Truncate(overlay, 120)}」"
                 : $"提醒发送失败（详见上一条 ERROR）：mask=「{notification.MaskText}」");
         }
 
@@ -412,6 +434,37 @@ public sealed class WindowTextMonitor : BackgroundService
         var title = string.IsNullOrEmpty(window.Title) ? "<无标题>" : window.Title;
         return $"[0x{window.Handle.ToInt64():X}] 标题=「{title}」类名={window.ClassName} " +
                $"可见={window.IsVisible} 进程={window.ProcessName} 区域=({window.Left},{window.Top})-({window.Right},{window.Bottom})";
+    }
+
+    /// <summary>把本地数据库读到的最新消息正文附加到提醒文本后（超长截断）。</summary>
+    private string AppendMessageBody(string overlay, LocalMessage message)
+    {
+        try
+        {
+            var title = (message.Title ?? string.Empty).Trim();
+            var content = (message.Content ?? string.Empty).Trim();
+            if (title.Length == 0 && content.Length == 0)
+            {
+                return overlay;
+            }
+
+            var body = title.Length == 0
+                ? content
+                : (content.Length == 0 ? title : title + "\n" + content);
+
+            var max = Math.Max(20, _options.MessageBodyMaxChars);
+            if (body.Length > max)
+            {
+                body = body.Substring(0, max) + "…";
+            }
+
+            var tag = string.IsNullOrWhiteSpace(message.Table) ? "消息" : message.Table;
+            return overlay + $"\n【{tag}】{body}";
+        }
+        catch
+        {
+            return overlay;
+        }
     }
 
     private static string Truncate(string text, int maxChars)
