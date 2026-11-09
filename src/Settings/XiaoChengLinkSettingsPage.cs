@@ -75,6 +75,8 @@ public sealed class XiaoChengLinkSettingsPage : SettingsPageBase
     private TextBox? _keywordsBox;
     private NumericUpDown? _pollIntervalBox;
     private NumericUpDown? _cooldownBox;
+    private NumericUpDown? _visualThresholdBox;
+    private NumericUpDown? _throttleBox;
     private ComboBox? _matchModeCombo;
     private CheckBox? _triggerOnAppearCheck;
     private TextBlock? _statusText;
@@ -199,7 +201,7 @@ public sealed class XiaoChengLinkSettingsPage : SettingsPageBase
         root.Children.Add(new TextBlock
         {
             Text = "配置「小橙看班」(inArt_PC) 窗口监控规则。保存后：窗口标题正则立即重载；" +
-                   "进程名、轮询间隔、冷却时间、窗口出现触发从下一轮扫描起生效；" +
+                   "进程名、轮询间隔、冷却时间、窗口出现触发、画面变化阈值、全局节流从下一轮扫描起生效；" +
                    "关键词与匹配方式在插件重启后生效（当前实现为单例快照）。",
             TextWrapping = TextWrapping.Wrap,
             Foreground = Brushes.Gray,
@@ -285,7 +287,45 @@ public sealed class XiaoChengLinkSettingsPage : SettingsPageBase
         root.Children.Add(_cooldownBox);
         root.Children.Add(FieldHint("同一窗口同一文本在冷却时间内不重复提醒；默认 60 秒。"));
 
-        // 7) 窗口出现触发
+        // 7) 画面变化阈值（太灵敏/太迟钝就调这里）
+        root.Children.Add(FieldLabel("画面变化阈值（%，越小越灵敏）"));
+        _visualThresholdBox = new NumericUpDown
+        {
+            Minimum = 0.1m,
+            Maximum = 50m,
+            Increment = 0.1m,
+            Value = (decimal)_options.VisualChangeThresholdPercent,
+            FormatString = "0.0",
+            HorizontalAlignment = HorizontalAlignment.Left,
+            MinWidth = 200,
+            Margin = new Thickness(0, 0, 0, 8),
+        };
+        root.Children.Add(_visualThresholdBox);
+        root.Children.Add(FieldHint(
+            "判定「窗口画面变化」所需的变化比例，默认 0.4%。" +
+            "太灵敏（鼠标划过、界面动画、滚动也触发）→ 调大到 1.0–3.0；" +
+            "太迟钝（新消息来了不触发）→ 调小到 0.2–0.3。范围 0.1–50，保存后从下一轮扫描起生效。"));
+
+        // 8) 全局提醒节流（防连发）
+        root.Children.Add(FieldLabel("全局提醒节流（秒）"));
+        _throttleBox = new NumericUpDown
+        {
+            Minimum = 0,
+            Maximum = 600,
+            Increment = 1,
+            Value = _options.NotificationThrottleSeconds,
+            FormatString = "0",
+            HorizontalAlignment = HorizontalAlignment.Left,
+            MinWidth = 200,
+            Margin = new Thickness(0, 0, 0, 8),
+        };
+        root.Children.Add(_throttleBox);
+        root.Children.Add(FieldHint(
+            "任一提醒发出后，N 秒内不再发下一条，默认 12 秒。" +
+            "觉得弹得太频繁 → 调大（如 20–60）；希望同一时间多条都弹 → 调小或设为 0（0=关闭节流）。" +
+            "保存后从下一轮扫描起生效。"));
+
+        // 9) 窗口出现触发
         _triggerOnAppearCheck = new CheckBox
         {
             Content = "目标窗口出现时触发提醒（UIA 读不到正文时的降级触发）",
@@ -401,12 +441,13 @@ public sealed class XiaoChengLinkSettingsPage : SettingsPageBase
                 $"标题正则=[{string.Join(", ", _options.WindowTitlePatterns)}] 关键词={_options.Keywords.Length}个 " +
                 $"模式={_options.KeywordMatchMode} 轮询={_options.PollIntervalMs}ms " +
                 $"窗口出现触发={_options.TriggerOnWindowAppear} 冷却={_options.CooldownSeconds}s " +
+                $"画面阈值={_options.VisualChangeThresholdPercent:F2}% 全局节流={_options.NotificationThrottleSeconds}s " +
                 $"标题正则重载={scannerReloaded}");
 
             if (saved)
             {
                 SetStatus(
-                    "已保存，立即生效（标题正则已重载）。进程名/轮询间隔/冷却时间/窗口出现触发从下一轮扫描起生效；" +
+                    "已保存，立即生效（标题正则已重载）。进程名/轮询间隔/冷却时间/窗口出现触发/画面变化阈值/全局节流从下一轮扫描起生效；" +
                     "关键词与匹配方式需重启插件后生效。",
                     success: true);
             }
@@ -443,6 +484,16 @@ public sealed class XiaoChengLinkSettingsPage : SettingsPageBase
             _options.CooldownSeconds = (int)cooldown;
         }
 
+        if (_visualThresholdBox?.Value is decimal visualThreshold)
+        {
+            _options.VisualChangeThresholdPercent = (double)visualThreshold;
+        }
+
+        if (_throttleBox?.Value is decimal throttle)
+        {
+            _options.NotificationThrottleSeconds = (int)throttle;
+        }
+
         _options.KeywordMatchMode = _matchModeCombo?.SelectedIndex == 1 ? MatchModeRegex : MatchModeContains;
         _options.TriggerOnWindowAppear = _triggerOnAppearCheck?.IsChecked ?? _options.TriggerOnWindowAppear;
     }
@@ -472,6 +523,16 @@ public sealed class XiaoChengLinkSettingsPage : SettingsPageBase
         if (_cooldownBox is not null)
         {
             _cooldownBox.Value = _options.CooldownSeconds;
+        }
+
+        if (_visualThresholdBox is not null)
+        {
+            _visualThresholdBox.Value = (decimal)_options.VisualChangeThresholdPercent;
+        }
+
+        if (_throttleBox is not null)
+        {
+            _throttleBox.Value = _options.NotificationThrottleSeconds;
         }
 
         if (_matchModeCombo is not null)
