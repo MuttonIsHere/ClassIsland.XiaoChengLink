@@ -1,4 +1,4 @@
-{
+﻿{
   "processNames": ["inArt_PC"],
   "windowTitlePatterns": ["消息提醒", "班级课表"],
   "windowClassPatterns": ["^FMTfrm", "^TForm", "^Tfrm"],

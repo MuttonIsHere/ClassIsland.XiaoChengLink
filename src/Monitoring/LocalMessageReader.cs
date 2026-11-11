@@ -1,14 +1,13 @@
 // ─── LocalMessageReader —— 从“小橙看班”本地数据库读取最新消息正文 ───────────
 // 背景（2026-11-09 实测）：
 //   · 小橙看班把消息/通知缓存在 D:\inArtBoard\Data.idb（Microsoft Jet / Access .mdb 格式）；
-//   · 表结构含 HomeWork / ClassNotice / SchoolNotice / ParentMsg / WelcomeWord 等，均有标题/正文/时间字段；
-//   · Jet OLEDB 4.0 只有 32 位提供程序，而 ClassIsland 插件跑在 64 位进程里，无法直接打开；
-//   · 实测 64 位 .NET 的 OleDb/ADODB 都打不开该库，但 32 位 Windows PowerShell 可以。
-// 因此本类在“即将弹提醒”时，把 Data.idb 只读复制到临时目录，调用随插件附带的
-// read-message.ps1（32 位 PowerShell 执行）查询最新一条记录，返回标题/正文/时间。
+//   · 表结构含 HomeWork / ClassNotice / SchoolNotice / ParentMsg / WelcomeWord 等；
+//   · Jet OLEDB 4.0 只有 32 位提供程序，64 位 ClassIsland 插件无法直接打开，因此调用随附的
+//     read-message.ps1（32 位 Windows PowerShell）只读查询。
 //
-// 性能：只在触发提醒时执行（不是每次轮询），一次约 0.3–1s；失败一律返回 null，退回通用提示。
-// 隐私/安全：只读本地数据库副本，不上传；脚本在插件目录内，可用 settings.json 关闭（ReadMessageBodyFromDatabase=false）。
+// 2026-11-11 修复：读取失败不再静默吞掉——返回 MessageReadResult.Error，由 WindowTextMonitor 直接拼到
+// 提醒正文里（【正文读取失败】……），让用户一眼看出是脚本、数据库、PowerShell 还是“无新鲜消息”的问题。
+// 隐私/安全：只读本地数据库副本，不上传；可用 settings.json 的 ReadMessageBodyFromDatabase=false 关闭。
 
 using System;
 using System.Collections.Generic;
@@ -32,7 +31,17 @@ public sealed class LocalMessage
     public string Time { get; set; } = string.Empty;
 }
 
-/// <summary>读取小橙看班本地 Jet 数据库中的最新消息（通过 32 位 PowerShell 辅助脚本）。</summary>
+/// <summary>正文读取结果：Success 时有 Message；失败时有 Error（用于直接显示在提醒里）。</summary>
+public sealed class MessageReadResult
+{
+    public LocalMessage? Message { get; init; }
+
+    public string? Error { get; init; }
+
+    public bool Success => Message is not null;
+}
+
+/// <summary>读取小橙看班本地 Jet 数据库中的消息（通过 32 位 PowerShell 辅助脚本）。</summary>
 public sealed class LocalMessageReader
 {
     private const string ScriptFileName = "read-message.ps1";
@@ -40,14 +49,10 @@ public sealed class LocalMessageReader
 
     private readonly MonitorOptions _options;
     private readonly string _baseDirectory;
-    private bool _scriptMissingLogged;
-    private bool _dbMissingLogged;
 
     public LocalMessageReader(MonitorOptions options)
     {
         _options = options;
-        // 插件程序集所在目录（ClassIsland 会从 data\Plugins\<id>\ 加载；AppContext.BaseDirectory 是宿主 app 目录，
-        // 不能用来找插件自带文件）。
         var assemblyDirectory = string.Empty;
         try
         {
@@ -61,14 +66,12 @@ public sealed class LocalMessageReader
         _baseDirectory = string.IsNullOrWhiteSpace(assemblyDirectory) ? AppContext.BaseDirectory : assemblyDirectory;
     }
 
-    /// <summary>尝试读取最新消息；失败/关闭/无数据时返回 null（绝不抛出）。</summary>
-    /// <param name="windowClass">触发本次提醒的窗口类名（用于只查对应表）。</param>
-    /// <param name="windowTitle">触发本次提醒的窗口标题（备用判断）。</param>
-    public LocalMessage? TryGetLatestMessage(string? windowClass = null, string? windowTitle = null)
+    /// <summary>读取触发窗口对应的最新消息；失败时返回带 Error 的结果（不会抛出）。</summary>
+    public MessageReadResult Read(string? windowClass = null, string? windowTitle = null)
     {
         if (!_options.ReadMessageBodyFromDatabase)
         {
-            return null;
+            return new MessageReadResult();
         }
 
         string? tempDb = null;
@@ -77,46 +80,46 @@ public sealed class LocalMessageReader
             var scriptPath = ResolveScriptPath();
             if (scriptPath is null)
             {
-                if (!_scriptMissingLogged)
-                {
-                    _scriptMissingLogged = true;
-                    PluginLog.Warn($"未找到消息读取脚本 {ScriptFileName}（插件目录：{_baseDirectory}），正文将退回通用提示。");
-                }
-
-                return null;
+                var folders = string.Join("；", CandidateScriptFolders());
+                return Fail($"未找到 {ScriptFileName}。已查找：{folders}");
             }
 
-            var sourceDb = ResolveDatabasePath();
+            var sourceDb = ResolveDatabasePath(out var dbError);
             if (sourceDb is null)
             {
-                if (!_dbMissingLogged)
-                {
-                    _dbMissingLogged = true;
-                    PluginLog.Warn("未找到小橙看班本地数据库（Data.idb），正文将退回通用提示。");
-                }
-
-                return null;
-            }
-
-            tempDb = CopyDatabaseReadOnly(sourceDb);
-            if (tempDb is null)
-            {
-                return null;
+                return Fail(dbError ?? "未找到 Data.idb");
             }
 
             var tables = ResolveTablesForWindow(windowClass, windowTitle);
-            var json = RunReader(scriptPath, tempDb, sourceDb, tables);
-            if (string.IsNullOrWhiteSpace(json))
+            if (tables == "__none__")
             {
-                return null;
+                // 当前窗口类型没有消息正文（如班级课表），不显示“读取失败”。
+                return new MessageReadResult();
             }
 
-            return ParseResult(json);
+            tempDb = CopyDatabaseReadOnly(sourceDb, out var copyError);
+            if (tempDb is null)
+            {
+                return Fail($"复制 Data.idb 失败：{copyError}");
+            }
+
+            var run = RunReader(scriptPath, tempDb, sourceDb, tables);
+            if (run.Output is null)
+            {
+                return Fail(run.Error ?? "PowerShell 未返回输出");
+            }
+
+            var parsed = ParseResult(run.Output, tables, Math.Max(1, _options.MessageBodyFreshSeconds));
+            if (parsed.Success)
+            {
+                return parsed;
+            }
+
+            return Fail(parsed.Error ?? "脚本输出无法解析");
         }
         catch (Exception ex)
         {
-            PluginLog.Debug("读取本地消息正文失败（已忽略）：" + ex.Message);
-            return null;
+            return Fail("读取异常：" + ex.GetType().Name + "：" + ex.Message);
         }
         finally
         {
@@ -127,11 +130,16 @@ public sealed class LocalMessageReader
         }
     }
 
+    private static MessageReadResult Fail(string error)
+    {
+        PluginLog.Warn("数据库正文读取失败：" + error);
+        return new MessageReadResult { Error = error };
+    }
+
     /// <summary>
     /// 窗口类名/标题 → 只查询对应的数据库表（避免不同窗口的数据串台）。
-    /// 已实测：FMTfrmText2Voice（全屏播报）写入 WelcomeWord 表（Content=播报文字，Addtime=插入时间，
-    /// 播报结束后行会被删除）；FMTfrmMessageCenter（消息提醒）是普通消息汇总。
-    /// 返回空字符串表示不限制表。
+    /// 已实测：FMTfrmText2Voice（全屏播报）写入 WelcomeWord 表；FMTfrmMessageCenter（消息提醒）是普通消息汇总。
+    /// 返回空字符串表示不限制表；返回 "__none__" 表示该窗口不需要正文。
     /// </summary>
     private static string ResolveTablesForWindow(string? windowClass, string? windowTitle)
     {
@@ -148,23 +156,29 @@ public sealed class LocalMessageReader
         if (cls.IndexOf("MessageCenter", StringComparison.OrdinalIgnoreCase) >= 0 ||
             title.IndexOf("消息提醒", StringComparison.OrdinalIgnoreCase) >= 0)
         {
-            return "HomeWork,ClassNotice,SchoolNotice,ParentMsg,WelcomeWord";
+            return "HomeWork,ClassNotice,SchoolNotice,ParentMsg,WelcomeWord,ScheduledTask";
         }
 
         if (cls.IndexOf("ClassCourse", StringComparison.OrdinalIgnoreCase) >= 0)
         {
-            // 班级课表窗口没有“消息正文”，不读库（返回不存在的表名会让脚本得到空结果）。
             return "__none__";
         }
 
         return string.Empty;
     }
 
+    private IEnumerable<string> CandidateScriptFolders()
+    {
+        var folders = new List<string>();
+        if (!string.IsNullOrWhiteSpace(PluginPaths.PluginFolder)) folders.Add(PluginPaths.PluginFolder!);
+        if (!string.IsNullOrWhiteSpace(_baseDirectory)) folders.Add(_baseDirectory);
+        if (!string.IsNullOrWhiteSpace(PluginPaths.PluginConfigFolder)) folders.Add(PluginPaths.PluginConfigFolder!);
+        return folders;
+    }
+
     private string? ResolveScriptPath()
     {
         var candidates = new List<string>();
-
-        // 优先：插件的实际安装目录（PluginBase.Info.PluginFolderPath，由 Plugin.Initialize 注入）。
         var pluginFolder = PluginPaths.PluginFolder;
         if (!string.IsNullOrWhiteSpace(pluginFolder))
         {
@@ -175,7 +189,6 @@ public sealed class LocalMessageReader
         candidates.Add(Path.Combine(_baseDirectory, ScriptFileName));
         candidates.Add(Path.Combine(_baseDirectory, "tools", ScriptFileName));
 
-        // 兜底：插件配置目录（用户/开发者可手动放脚本的位置）。
         var configFolder = PluginPaths.PluginConfigFolder;
         if (!string.IsNullOrWhiteSpace(configFolder))
         {
@@ -194,8 +207,9 @@ public sealed class LocalMessageReader
     }
 
     /// <summary>定位 Data.idb：优先用户配置；否则从运行中的 inArt_PC 进程路径推导。</summary>
-    private string? ResolveDatabasePath()
+    private string? ResolveDatabasePath(out string? error)
     {
+        error = null;
         var configured = _options.MessageDatabasePath;
         if (!string.IsNullOrWhiteSpace(configured))
         {
@@ -205,26 +219,30 @@ public sealed class LocalMessageReader
                 return expanded;
             }
 
-            PluginLog.Warn("settings.json 里配置的 MessageDatabasePath 不存在：" + expanded);
+            error = $"配置的 messageDatabasePath 不存在：{expanded}";
             return null;
         }
 
-        foreach (var process in Process.GetProcessesByName("inArt_PC"))
+        var processes = Process.GetProcessesByName("inArt_PC");
+        if (processes.Length == 0)
+        {
+            error = "未找到运行中的 inArt_PC 进程（请先启动小橙看班，或在设置里填 messageDatabasePath）";
+            return null;
+        }
+
+        var dirs = new List<string>();
+        foreach (var process in processes)
         {
             try
             {
                 var exePath = process.MainModule?.FileName;
-                if (string.IsNullOrWhiteSpace(exePath))
-                {
-                    continue;
-                }
-
-                var appDir = Path.GetDirectoryName(exePath);
+                var appDir = string.IsNullOrWhiteSpace(exePath) ? null : Path.GetDirectoryName(exePath);
                 if (string.IsNullOrWhiteSpace(appDir))
                 {
                     continue;
                 }
 
+                dirs.Add(appDir);
                 var candidates = new[]
                 {
                     Path.Combine(appDir, "Data.idb"),
@@ -241,7 +259,7 @@ public sealed class LocalMessageReader
             }
             catch (Exception ex)
             {
-                PluginLog.Debug("读取 inArt_PC 进程路径失败（已忽略）：" + ex.Message);
+                error = "读取 inArt_PC 路径失败：" + ex.Message;
             }
             finally
             {
@@ -249,12 +267,16 @@ public sealed class LocalMessageReader
             }
         }
 
+        error = dirs.Count == 0
+            ? (error ?? "无法获取 inArt_PC 程序目录")
+            : $"在 {string.Join("、", dirs)} 下未找到 Data.idb";
         return null;
     }
 
     /// <summary>把正在被小橙看班占用的 Data.idb 以共享读方式复制到临时文件。</summary>
-    private static string? CopyDatabaseReadOnly(string sourcePath)
+    private static string? CopyDatabaseReadOnly(string sourcePath, out string? error)
     {
+        error = null;
         try
         {
             var tempDir = Path.Combine(Path.GetTempPath(), "XiaoChengLink");
@@ -268,17 +290,17 @@ public sealed class LocalMessageReader
         }
         catch (Exception ex)
         {
-            PluginLog.Debug("复制本地数据库失败（已忽略）：" + ex.Message);
+            error = ex.GetType().Name + "：" + ex.Message;
             return null;
         }
     }
 
-    private string? RunReader(string scriptPath, string dbPath, string liveDbPath, string tables)
+    private ScriptRunResult RunReader(string scriptPath, string dbPath, string liveDbPath, string tables)
     {
         var powershell = Resolve32BitPowerShell();
         if (powershell is null)
         {
-            return null;
+            return new ScriptRunResult(null, "未找到 32 位 PowerShell（SysWOW64\\WindowsPowerShell\\v1.0\\powershell.exe）");
         }
 
         var freshSeconds = Math.Max(1, _options.MessageBodyFreshSeconds);
@@ -290,43 +312,63 @@ public sealed class LocalMessageReader
             arguments += $" -Tables \"{tables}\"";
         }
 
-        using var process = new Process
+        Process? process = null;
+        try
         {
-            StartInfo = new ProcessStartInfo
+            process = new Process
             {
-                FileName = powershell,
-                Arguments = arguments,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            },
-        };
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = powershell,
+                    Arguments = arguments,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                },
+            };
 
-        process.Start();
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEndAsync();
-        if (!process.WaitForExit((int)ProcessTimeout.TotalMilliseconds))
-        {
-            try { process.Kill(); } catch { }
-            PluginLog.Warn("本地消息读取脚本超时（已忽略），正文退回通用提示。");
-            return null;
+            process.Start();
+            var stdout = process.StandardOutput.ReadToEndAsync();
+            var stderr = process.StandardError.ReadToEndAsync();
+            if (!process.WaitForExit((int)ProcessTimeout.TotalMilliseconds))
+            {
+                try { process.Kill(); } catch { }
+                return new ScriptRunResult(null, "读取超时（PowerShell > 8 秒未返回，脚本可能卡住）");
+            }
+
+            var output = SafeResult(stdout);
+            var error = SafeResult(stderr);
+            if (process.ExitCode != 0)
+            {
+                // 脚本用退出码 1 表示“没找到新鲜消息/业务失败”，但 stdout 仍是带 error 的 JSON；
+                // 交给 ParseResult 转成友好文案，别把原始 JSON 直接弹给用户。
+                var trimmed = (output ?? string.Empty).Trim();
+                if (trimmed.StartsWith("{") && trimmed.Contains("\"ok\""))
+                {
+                    return new ScriptRunResult(trimmed, null);
+                }
+
+                var detail = string.IsNullOrWhiteSpace(error) ? output : error;
+                return new ScriptRunResult(null,
+                    $"脚本退出码={process.ExitCode}：{Truncate(detail ?? string.Empty, 220)}");
+            }
+
+            if (string.IsNullOrWhiteSpace(output))
+            {
+                return new ScriptRunResult(null, "脚本退出码=0 但没有输出");
+            }
+
+            return new ScriptRunResult(output, null);
         }
-
-        var output = SafeResult(stdout);
-        var error = SafeResult(stderr);
-        if (!string.IsNullOrWhiteSpace(error))
+        catch (Exception ex)
         {
-            PluginLog.Debug("本地消息读取脚本 stderr：" + Truncate(error ?? string.Empty, 300));
+            return new ScriptRunResult(null, "启动 PowerShell 失败：" + ex.GetType().Name + "：" + ex.Message);
         }
-
-        if (process.ExitCode != 0)
+        finally
         {
-            PluginLog.Debug($"本地消息读取脚本退出码={process.ExitCode}：{Truncate(output ?? string.Empty, 300)}");
-            return null;
+            process?.Dispose();
         }
-
-        return output;
     }
 
     private static string? Resolve32BitPowerShell()
@@ -361,16 +403,44 @@ public sealed class LocalMessageReader
         }
     }
 
-    private static LocalMessage? ParseResult(string json)
+    private static MessageReadResult ParseResult(string json, string tables, int freshSeconds)
     {
         try
         {
             using var document = JsonDocument.Parse(json);
             var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object) return null;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return new MessageReadResult { Error = "脚本输出不是 JSON 对象：" + Truncate(json, 180) };
+            }
 
             var ok = root.TryGetProperty("ok", out var okElement) && okElement.ValueKind == JsonValueKind.True;
-            if (!ok) return null;
+            if (!ok)
+            {
+                var scriptError = GetString(root, "error");
+                var tableScope = string.IsNullOrWhiteSpace(tables) ? "全部消息表" : tables;
+                string friendly;
+                if (scriptError.IndexOf("no fresh message", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    friendly = $"触发前 {freshSeconds} 秒内 Data.idb 没有新记录（可能只是窗口重绘/程序刚启动，或消息写库超过重试时间；可在设置里调大“正文新鲜度”）";
+                }
+                else if (scriptError.IndexOf("db file not found", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    friendly = "Data.idb 不存在（请确认小橙看班已启动，或检查数据库路径设置）";
+                }
+                else if (scriptError.IndexOf("no message found", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    friendly = $"数据库里没有消息（查询表={tableScope}）";
+                }
+                else
+                {
+                    friendly = string.IsNullOrWhiteSpace(scriptError)
+                        ? "脚本未返回原因"
+                        : "脚本报告：" + Truncate(scriptError, 160);
+                }
+
+                return new MessageReadResult { Error = friendly };
+            }
 
             var message = new LocalMessage
             {
@@ -382,14 +452,17 @@ public sealed class LocalMessageReader
 
             if (string.IsNullOrWhiteSpace(message.Title) && string.IsNullOrWhiteSpace(message.Content))
             {
-                return null;
+                return new MessageReadResult { Error = "脚本返回的标题/正文都为空：" + Truncate(json, 180) };
             }
 
-            return message;
+            return new MessageReadResult { Message = message };
         }
-        catch
+        catch (Exception ex)
         {
-            return null;
+            return new MessageReadResult
+            {
+                Error = "解析脚本输出失败：" + ex.GetType().Name + "：" + Truncate(json, 140),
+            };
         }
     }
 
@@ -402,7 +475,21 @@ public sealed class LocalMessageReader
 
     private static string Truncate(string text, int maxChars)
     {
-        return text.Length <= maxChars ? text : text.Substring(0, maxChars) + "…";
+        var oneLine = text.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        return oneLine.Length <= maxChars ? oneLine : oneLine.Substring(0, maxChars) + "…";
+    }
+
+    private sealed class ScriptRunResult
+    {
+        public ScriptRunResult(string? output, string? error)
+        {
+            Output = output;
+            Error = error;
+        }
+
+        public string? Output { get; }
+
+        public string? Error { get; }
     }
 }
 

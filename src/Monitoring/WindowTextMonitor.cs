@@ -263,34 +263,40 @@ public sealed class WindowTextMonitor : BackgroundService
         }
 
         // 从本地数据库读取最新消息正文（只在有提醒要发时才执行，避免轮询开销）。
-        LocalMessage? latestMessage = null;
+        MessageReadResult? readResult = null;
         if (pending.Count > 0 && _options.ReadMessageBodyFromDatabase)
         {
-            latestMessage = _messageReader.TryGetLatestMessage(triggerWindow?.ClassName, triggerWindow?.Title);
-            if (latestMessage is not null)
+            readResult = _messageReader.Read(triggerWindow?.ClassName, triggerWindow?.Title);
+            if (readResult.Message is not null)
             {
+                var message = readResult.Message;
                 PluginLog.Info(
-                    $"数据库正文：table={latestMessage.Table} time={latestMessage.Time} " +
-                    $"title=「{Truncate(latestMessage.Title, 60)}」 content=「{Truncate(latestMessage.Content, 80)}」" +
+                    $"数据库正文：table={message.Table} time={message.Time} " +
+                    $"title=「{Truncate(message.Title, 60)}」 content=「{Truncate(message.Content, 80)}」" +
                     $"（触发窗口类={triggerWindow?.ClassName} 标题={triggerWindow?.Title}）");
             }
-            else
+            else if (!string.IsNullOrWhiteSpace(readResult.Error))
             {
-                PluginLog.Debug($"数据库正文：未找到与窗口类 {triggerWindow?.ClassName} 对应的新鲜消息（退回通用提示）。");
+                PluginLog.Warn($"数据库正文读取失败（将直接显示在提醒里）：{readResult.Error}");
             }
         }
 
         foreach (var notification in pending)
         {
             var overlay = notification.OverlayText;
-            if (latestMessage is not null)
+            if (readResult?.Message is not null)
             {
-                overlay = AppendMessageBody(overlay, latestMessage);
+                overlay = AppendMessageBody(overlay, readResult.Message);
+            }
+            else if (!string.IsNullOrWhiteSpace(readResult?.Error))
+            {
+                // 关键修复：读取失败不再静默退回通用提示，直接把原因拼进提醒正文，方便一眼定位。
+                overlay += $"\n【正文读取失败】{Truncate(readResult.Error!, 220)}";
             }
 
             var sent = await _notifier.SendAsync(overlay, notification.MaskText, cancellationToken).ConfigureAwait(false);
             PluginLog.Info(sent
-                ? $"提醒已入队：mask=「{notification.MaskText}」正文=「{Truncate(overlay, 120)}」"
+                ? $"提醒已入队：mask=「{notification.MaskText}」正文=「{Truncate(overlay, 200)}」"
                 : $"提醒发送失败（详见上一条 ERROR）：mask=「{notification.MaskText}」");
         }
 
