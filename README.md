@@ -1,4 +1,4 @@
-# 小橙看班联动（XiaoChengLink）— ClassIsland 2.1 插件
+﻿# 小橙看班联动（XiaoChengLink）— ClassIsland 2.1 插件
 
 <p align="center"><img src="icon.png" width="96" height="96" alt="XiaoChengLink icon"></p>
 
@@ -170,9 +170,9 @@ D:\inArtBoard\Data.idb   （Microsoft Jet / Access 格式；小橙看班运行�
 | 时机 | 提醒内容 |
 |---|---|
 | 考试开始 | `考试已开始，科目：语文` |
-| 距结束 15 分钟 | `距离 语文 科目结束还有 15 分钟，请检查答题卡` |
+| 距结束 15 分钟 | `离考试结束还有15分钟，请注意掌控时间。` |
 | 距结束 5 分钟 | `距离 语文 科目结束还有 5 分钟，请检查答题卡` |
-| 考试结束 | `考试结束，请停止答题` |
+| 考试结束 | `考试结束，请立即停笔！` |
 
 **真实数据格式**（2026-11-11 实测）：
 

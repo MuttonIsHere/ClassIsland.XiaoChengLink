@@ -82,7 +82,7 @@ public sealed class ExamMonitor : BackgroundService
             // 剩余 15 分（错过 15 分窗口就不补发 15 分，避免启动时连弹）
             if (now >= end.Value - TimeSpan.FromMinutes(15) && now < end.Value - TimeSpan.FromMinutes(5) && SendOnce(id + ":15"))
             {
-                Notify($"距离 {course} 科目结束还有 15 分钟，请检查答题卡", "#F59E0B");
+                Notify("离考试结束还有15分钟，请注意掌控时间。", "#F59E0B");
             }
 
             // 剩余 5 分
@@ -94,7 +94,7 @@ public sealed class ExamMonitor : BackgroundService
             // 结束：只处理刚结束 10 分钟内的，避免启动时对历史考试补弹
             if (now >= end.Value && now - end.Value <= TimeSpan.FromMinutes(10) && SendOnce(id + ":end"))
             {
-                Notify("考试结束，请停止答题", "#10B981");
+                Notify("考试结束，请立即停笔！", "#10B981");
             }
         }
     }

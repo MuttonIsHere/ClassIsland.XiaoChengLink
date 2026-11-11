@@ -9,9 +9,9 @@ description: 监听“小橙看班”(inArt_PC) 的目标窗口出现/标题变�
 # 与 csproj 的 AssemblyName 一致；csc 直编产物文件名也必须是 XiaoChengLink.dll
 entranceAssembly: XiaoChengLink.dll
 author: XiaoChengLink
-version: 2.0.0.0
+version: 2.0.1.0
 # 最低宿主版本：2.0.0.0（2.1.0.1 加载器只做“不低于 2.0.0.0”的下限校验）
-apiVersion: 2.0.0.0
+apiversion: 2.0.1.0
 icon: icon.png
 readme: README.md
 # icon: icon.png   # 本原型未附带图标，省略该字段（宿主会使用默认图标；是否必需需实测）
