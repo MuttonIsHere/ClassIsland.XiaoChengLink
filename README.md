@@ -1,5 +1,7 @@
 # 小橙看班联动（XiaoChengLink）— ClassIsland 2.1 插件
 
+<p align="center"><img src="icon.png" width="96" height="96" alt="XiaoChengLink icon"></p>
+
 [![Build & Release](https://github.com/MuttonIsHere/ClassIsland.XiaoChengLink/actions/workflows/build.yml/badge.svg)](https://github.com/MuttonIsHere/ClassIsland.XiaoChengLink/actions/workflows/build.yml)
 [![Latest Release](https://img.shields.io/github/v/release/MuttonIsHere/ClassIsland.XiaoChengLink?include_prereleases&label=release)](https://github.com/MuttonIsHere/ClassIsland.XiaoChengLink/releases)
 
@@ -11,39 +13,8 @@
 - 目标宿主：ClassIsland **2.1.0.1**（`ClassIsland.Core.dll` AssemblyVersion 2.1.0.1）
 - 插件清单：`manifest.yml`（`apiVersion: 2.0.0.0`，2.1.0.1 加载器最低要求）
 - 状态：**可用**。已在真实 ClassIsland 2.1.0.1 上验证：插件加载成功、窗口出现/画面变化时能触发提醒，
-  **并能按触发窗口类型从本地 `Data.idb` 读取对应消息正文**（v1.3.1，已实测全屏播报文字正确）；
-  带图形化设置页（进程名、标题/类名规则、关键词、轮询、冷却、**画面变化阈值**、**全局提醒节流**、**消息正文读取**）。
-
----
-
-## 架构总览（一张图看懂）
-
-```mermaid
-flowchart LR
-    A["① Win32 窗口监控<br/>EnumWindows<br/>进程名 + 标题/类名正则"] --> B["② 画面变化检测<br/>PrintWindow → 40×40 亮度网格<br/>变化 ≥ 0.4%"]
-    B --> C{"③ 触发判定<br/>单窗口冷却 + 12s 全局节流"}
-    C -->|"未命中"| A
-    C -->|"命中"| D["④ 等 1–2 秒 / 重试 4 次<br/>重新复制实时数据库"]
-    D --> E["⑤ 32 位 PowerShell<br/>只读 Jet 库 Data.idb<br/>（64 位插件无法直读）"]
-    E --> F["⑥ 窗口类名 → 表映射<br/>FMTfrmText2Voice → WelcomeWord<br/>FMTfrmMessageCenter → 消息表组"]
-    F --> G["⑦ 30 秒新鲜度过滤<br/>只认触发前刚写入的行"]
-    G --> H["⑧ ClassIsland 提醒<br/>遮罩 + 真实正文"]
-```
-
-**每一层都是踩过坑才长出来的：**
-
-| # | 阶段 | 为什么必须这样 |
-|---|---|---|
-| ① | Win32 窗口监控 | 小橙看班是 Delphi/VCL 自绘，UI Automation/MSAA 拿不到正文；但窗口类名（`FMTfrmText2Voice` / `FMTfrmMessageCenter`）稳定可读 |
-| ② | 画面变化检测 | 「消息提醒」是常驻窗口，新消息只改画面不重建窗口；`PrintWindow` 取 40×40 亮度网格做哈希，**不做 OCR** |
-| ③ | 触发判定 | 鼠标划过/动画会误触发 → 阈值可调；程序重启会连发 → 12 秒全局节流 |
-| ④ | 等待 + 重试 | 窗口先出现、数据库后落盘（实测延迟约 2–3 秒）；触发瞬间复制的库是旧的，必须**重新复制实时库**再查 |
-| ⑤ | 32 位 PowerShell | `Microsoft.Jet.OLEDB.4.0` 只有 32 位提供程序；ClassIsland 插件是 64 位进程，直连必失败（实测 E_FAIL） |
-| ⑥ | 窗口类名 → 表映射 | 全屏播报写 `WelcomeWord`，消息提醒写 `HomeWork/ClassNotice/SchoolNotice/ParentMsg/WelcomeWord`；不按窗口区分就会串台 |
-| ⑦ | 30 秒新鲜度 | `WelcomeWord` 的播报行**约 14 秒后就被删除**；只取“最新一条”会拿到旧消息，必须限定“触发前 30 秒内” |
-| ⑧ | ClassIsland 提醒 | 通过插件自己的 `NotificationProviderBase` 发出，正文带上真实标题/内容 |
-
-> 安全边界：只读（窗口枚举 / 内存截图 / 只读复制数据库），不注入、不修改小橙看班进程、不上传任何数据。
+  **并能从本地 `Data.idb` 读取最新消息正文显示在提醒里**（v1.3.0）；
+  带图形化设置页（进程名、标题/类名规则、关键词、轮询、冷却、**画面变化阈值**、**全局提醒节流**）。
 
 ---
 
@@ -163,26 +134,14 @@ D:\inArtBoard\Data.idb   （Microsoft Jet / Access 格式；小橙看班运行�
 1. 以共享读方式把 `Data.idb` 复制到临时目录（不影响小橙看班使用）；
 2. 调用随插件附带的 `read-message.ps1`（由 **32 位 PowerShell** 执行，因为 Jet 只有 32 位提供程序；
    ClassIsland 插件本身是 64 位进程，无法直接打开）；
-3. **先按触发窗口的类名/标题选择对应的表**（避免不同窗口的数据串台），再只接受**最近 30 秒内**
-   写入的记录；如果触发瞬间还没落盘，会重新复制实时数据库并重试（最多 4 次，约 1 秒一次）；
+3. 从所有消息表里选**时间最新、且有标题/正文**的那一条；
 4. 把它附加到提醒正文，例如：
 
 ```
-检测到「全屏播报」窗口出现（进程 inArt_PC，类名 FMTfrmText2Voice）
-【WelcomeWord】钱昶翰
-最终测试XYZ
+检测到「消息提醒」窗口出现（进程 inArt_PC，类名 FMTfrmMessageCenter）
+【HomeWork】11月9日（周一）
+测试
 ```
-
-**窗口类名 → 数据表（实测）**：
-
-| 窗口 | 证据 | 查询的表 |
-|---|---|---|
-| `FMTfrmText2Voice`（全屏播报） | 2026-11-09 22:27 实测：播报瞬间 `WelcomeWord` 插入一行（`Content=测试`、`Addtime=22:27:02`），约 14 秒后该行被删除 | **`WelcomeWord`** |
-| `FMTfrmMessageCenter`（消息提醒） | 普通消息汇总 | `HomeWork` / `ClassNotice` / `SchoolNotice` / `ParentMsg` / `WelcomeWord`（按新鲜度取最新） |
-| 其他窗口 | 兜底 | 所有消息表（同样只认最近 30 秒） |
-
-> 全屏播报的 `WelcomeWord` 行是**临时行**（播报结束后删除），所以必须“触发后立刻读 + 重试”，
-> 不能慢慢查，也不能只按“最新一条”跨表挑（那会把旧消息误当成本次播报）。
 
 相关配置（一般不須改，默认开启）：
 
@@ -190,8 +149,7 @@ D:\inArtBoard\Data.idb   （Microsoft Jet / Access 格式；小橙看班运行�
 |---|---|---|
 | `readMessageBodyFromDatabase` | `true` | 是否从本地数据库读取正文；改成 `false` 就只显示通用提示 |
 | `messageDatabasePath` | `""` | 留空 = 自动从运行中的 `inArt_PC.exe` 所在目录找 `Data.idb` |
-| `messageBodyFreshSeconds` | `30` | 只把触发前最近 N 秒内写入的记录当作本次正文（**防串台的关键**）；全屏播报行约 14 秒后会被删除 |
-| `messageBodyMaxAgeSeconds` | `3600` | 兼容旧配置（当前版本以 `messageBodyFreshSeconds` 为准） |
+| `messageBodyMaxAgeSeconds` | `3600` | 只接受最近 N 秒内的消息；0 = 不限制 |
 | `messageBodyMaxChars` | `300` | 正文最大长度，超出截断 |
 
 **读取失败怎么办**：插件会自动退回通用提示（不影响触发）。排查看插件日志里有没有
@@ -378,10 +336,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build-env\verify-plu
 插件注册了自己的 `SettingsPage`（`src/Settings/XiaoChengLinkSettingsPage.cs`，继承
 `ClassIsland.Core.Abstractions.Controls.SettingsPageBase`，用**纯 C# 构建 Avalonia 控件**，无 `.axaml`）。
 可配置：`processNames`、`windowTitlePatterns`、`keywords`、`keywordMatchMode`、`pollIntervalMs`、
-`cooldownSeconds`、`triggerOnWindowAppear`、**`visualChangeThresholdPercent`**、**`notificationThrottleSeconds`**，
-以及消息正文相关：**从本地数据库读取正文**、数据库路径、**正文新鲜度（秒）**、正文最大长度；
-点击「保存并应用」会写回 `<PluginConfigFolder>/settings.json` 并**热重载标题正则**
-（其余字段下一轮轮询生效；关键词/匹配方式需要重启插件生效——如实标注，后续可给 `KeywordMatcher` 加 Reload）。
+`cooldownSeconds`、`triggerOnWindowAppear`；点击「保存并应用」会写回
+`<PluginConfigFolder>/settings.json` 并**热重载标题正则**（其余字段下一轮轮询生效；关键词/匹配方式
+需要重启插件生效——如实标注，后续可给 `KeywordMatcher` 加 Reload）。
 
 > 实现细节与后续 XAML 化升级路径见 `src/Settings/README-SETTINGS.md`。
 > **真机注意**：设置页在设置窗口中是否正常显示、保存后热生效效果仍需实际打开设置窗口确认

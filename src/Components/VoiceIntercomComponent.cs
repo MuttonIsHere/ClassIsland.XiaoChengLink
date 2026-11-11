@@ -18,7 +18,7 @@ namespace XiaoChengLink.Components;
 [ComponentInfo(
     "C7F3B5A1-9E2D-4C8B-A6F4-1D2E3C4B5A69",
     "小橙语音对讲",
-    "",
+    "\uE9B2",
     "显示老师是否正在语音对讲（录音发送到电脑播放时显示）")]
 public sealed class VoiceIntercomComponent : ComponentBase
 {
