@@ -1,18 +1,18 @@
-﻿# read-message.ps1 —— 读取小橙看班本地 Jet 数据库（Data.idb）中「刚刚产生」的消息/播报记录，输出 JSON。
+﻿# read-message.ps1 —— 读取小橙看班本地 Jet 数据库（Data.idb）里“刚刚产生”的消息，输出 JSON。
 #
-# 由 XiaoChengLink 插件在触发提醒时调用（32 位 Windows PowerShell，因为 Jet OLEDB 4.0 是 32 位提供程序）。
-# 关键修复（2026-11-09）：
-#   · 只接受最近 FreshSeconds 秒内的记录（默认 30 秒），避免把数据库里很久以前的旧消息（如别的窗口/别的测试）
-#     误当成当前播报内容；
-#   · 触发瞬间数据库可能还没落盘/消息行可能刚插入后被很快删除，因此脚本内部会重试：
-#     如果传入的临时副本里没有新记录，会重新复制 LiveDbPath 指向的实时数据库再查（最多 4 次，每次 1 秒）；
-#   · 全屏播报（窗口类 FMTfrmText2Voice）实测写入 WelcomeWord 表：Content=播报文字、Addtime=插入时间，
-#     且该行在播报结束后会被删除，所以“新鲜度 + 重试”是必须的。
+# 由 XiaoChengLink 插件在触发提醒时调用（32 位 Windows PowerShell，因为 Jet OLEDB 4.0 只有 32 位提供程序）。
+#
+# 2026-11-11 修复：
+#   · WelcomeWord 的 AddUser 只作为“发送人”，**必须 Content 非空才算一条消息**；
+#     以前把 AddUser 当 title，行刚插入、Content 还没落盘时就会抓到“只有发送人”的半成品行。
+#   · 输出字段改为 sender + content（不再把发送人塞进 title）。
+#   · 只接受触发前 FreshSeconds 秒内的行；找不到就重试（重新复制实时库），最多 4 次。
 #
 # 只读：Mode=Read 打开数据库副本；不写入、不修改任何数据。
 #
-# 用法：powershell.exe -File read-message.ps1 -DbPath <副本> -MaxAgeSeconds 3600 [-FreshSeconds 30] [-Tables "WelcomeWord,..."] [-LiveDbPath D:\inArtBoard\Data.idb]
-# 输出：{"ok":true,"table":"WelcomeWord","title":"","content":"...","time":"..."} 或 {"ok":false,"error":"no fresh message"}
+# 用法：powershell.exe -File read-message.ps1 -DbPath <副本> -FreshSeconds 30 -LiveDbPath D:\inArtBoard\Data.idb [-Tables "WelcomeWord,..."]
+# 输出：{"ok":true,"table":"WelcomeWord","sender":"钱昶翰","content":"最终测试XYZ","time":"..."}
+#       {"ok":false,"error":"no fresh message"}
 param(
   [Parameter(Mandatory=$true)][string]$DbPath,
   [int]$MaxAgeSeconds = 0,
@@ -22,32 +22,56 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-function New-Result([bool]$ok, [string]$table, [string]$title, [string]$content, [string]$time, [string]$errorText) {
+function New-Result([bool]$ok, [string]$table, [string]$sender, [string]$content, [string]$time, [string]$errorText) {
   return [ordered]@{
-    ok = $ok; table = $table; title = $title; content = $content; time = $time; error = $errorText
+    ok = $ok; table = $table; sender = $sender; content = $content; time = $time; error = $errorText
   }
 }
 function Write-Json($obj) { [Console]::Out.Write(($obj | ConvertTo-Json -Compress -Depth 3)) }
 
+# 表名/字段名来自对 D:\inArtBoard\Data.idb 的实测（Jet/Access 格式，24 张表）。
+# 注意：只有 Content（或等价正文字段）非空才算一条完整消息；AddUser 只是发送人，不能单独构成消息。
 $sources = @(
-  @{ Table = 'HomeWork';      Title = @('Title');    Content = @('Content');  Time = @('BeginTime','Addtime','AddTime') },
-  @{ Table = 'ClassNotice';   Title = @();           Content = @('Content');  Time = @('BeginTime','Addtime','AddTime') },
-  @{ Table = 'SchoolNotice';  Title = @();           Content = @('Content');  Time = @('BeginTime','Addtime','AddTime') },
-  @{ Table = 'ParentMsg';     Title = @();           Content = @('Content');  Time = @('BeginTime','Addtime','AddTime') },
-  @{ Table = 'WelcomeWord';   Title = @('AddUser');  Content = @('Content');  Time = @('Addtime','BeginTime') },
-  @{ Table = 'ScheduledTask'; Title = @('TaskType'); Content = @('Notice');   Time = @('AddTime','StartTime','EndTime') },
-  @{ Table = 'ExamClock';     Title = @('TitleTip'); Content = @('TitleTip'); Time = @('AddTime','BeginTime','ExamDate') },
-  @{ Table = 'Album';         Title = @();           Content = @('Content');  Time = @('BeginTime','Addtime','AddTime') },
-  @{ Table = 'Video';         Title = @('Title');    Content = @('VideoUrl'); Time = @('BeginTime','Addtime','AddTime') },
-  @{ Table = 'CountDown';     Title = @('Title');    Content = @();           Time = @('EndDay') }
+  @{ Table = 'HomeWork';      Sender = @('AddUserName'); Content = @('Content');  Time = @('BeginTime','Addtime','AddTime') },
+  @{ Table = 'ClassNotice';   Sender = @('AddUserName'); Content = @('Content');  Time = @('BeginTime','Addtime','AddTime') },
+  @{ Table = 'SchoolNotice';  Sender = @();             Content = @('Content');  Time = @('BeginTime','Addtime','AddTime') },
+  @{ Table = 'ParentMsg';     Sender = @();             Content = @('Content');  Time = @('BeginTime','Addtime','AddTime') },
+  @{ Table = 'WelcomeWord';   Sender = @('AddUser');    Content = @('Content');  Time = @('Addtime','BeginTime') },
+  @{ Table = 'ScheduledTask'; Sender = @('AddUser');    Content = @('Notice');   Time = @('AddTime','StartTime','EndTime') },
+  @{ Table = 'ExamClock';     Sender = @('AddUser');    Content = @('TitleTip'); Time = @('AddTime','BeginTime','ExamDate') },
+  @{ Table = 'Album';         Sender = @();             Content = @('Content');  Time = @('BeginTime','Addtime','AddTime') },
+  @{ Table = 'Video';         Sender = @();             Content = @('Title');    Time = @('BeginTime','Addtime','AddTime') },
+  @{ Table = 'CountDown';     Sender = @('AddUser');    Content = @('Title');    Time = @('EndDay') }
 )
 
-# 可选：按窗口类名只查对应表（插件后续版本会传 -Tables；未传则查全部）
 if ($Tables -and $Tables.Trim().Length -gt 0) {
   $wanted = @($Tables.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
   if ($wanted.Count -gt 0) {
     $sources = @($sources | Where-Object { $wanted -contains $_.Table })
   }
+}
+
+function Read-Text($rs, $fields) {
+  foreach ($f in $fields) {
+    try {
+      $v = [string]$rs.Fields.Item($f).Value
+      if ($v -and $v.Trim().Length -gt 0) { return $v.Trim() }
+    } catch { }
+  }
+  return ''
+}
+
+function Read-Time($rs, $fields) {
+  foreach ($f in $fields) {
+    try {
+      $v = $rs.Fields.Item($f).Value
+      if ($null -ne $v) {
+        $parsed = [datetime]::MinValue
+        if ([datetime]::TryParse([string]$v, [ref]$parsed)) { return $parsed }
+      }
+    } catch { }
+  }
+  return [datetime]::MinValue
 }
 
 function Query-LatestFresh([string]$path) {
@@ -63,32 +87,16 @@ function Query-LatestFresh([string]$path) {
       try {
         $rs = $conn.Execute("SELECT * FROM [" + $src.Table + "]")
         while (-not $rs.EOF) {
-          $title = ''
-          foreach ($f in $src.Title) {
-            try { $v = [string]$rs.Fields.Item($f).Value } catch { $v = '' }
-            if ($v -and $v.Trim().Length -gt 0) { $title = $v.Trim(); break }
-          }
-          $content = ''
-          foreach ($f in $src.Content) {
-            try { $v = [string]$rs.Fields.Item($f).Value } catch { $v = '' }
-            if ($v -and $v.Trim().Length -gt 0) { $content = $v.Trim(); break }
-          }
-          $t = [datetime]::MinValue
-          foreach ($f in $src.Time) {
-            try {
-              $v = $rs.Fields.Item($f).Value
-              if ($null -ne $v) {
-                $parsed = [datetime]::MinValue
-                if ([datetime]::TryParse([string]$v, [ref]$parsed)) { $t = $parsed; break }
-              }
-            } catch { }
-          }
-          if ((($title.Length -gt 0) -or ($content.Length -gt 0)) -and $t -ne [datetime]::MinValue) {
-            if ($t -ge $minTime -and $t -le $now.AddMinutes(5)) {
-              if ($null -eq $best -or $t -gt $bestTime) {
-                $best = [ordered]@{ Table = $src.Table; Title = $title; Content = $content; Time = $t }
-                $bestTime = $t
-              }
+          $content = Read-Text $rs $src.Content
+          # 关键：Content 为空的行直接跳过（避免抓到只有 AddUser 的半成品行）
+          if ($content.Length -eq 0) { $rs.MoveNext(); continue }
+
+          $sender = Read-Text $rs $src.Sender
+          $t = Read-Time $rs $src.Time
+          if ($t -ne [datetime]::MinValue -and $t -ge $minTime -and $t -le $now.AddMinutes(5)) {
+            if ($null -eq $best -or $t -gt $bestTime) {
+              $best = [ordered]@{ Table = $src.Table; Sender = $sender; Content = $content; Time = $t }
+              $bestTime = $t
             }
           }
           $rs.MoveNext()
@@ -109,7 +117,7 @@ try {
   for ($attempt = 1; $attempt -le 4; $attempt++) {
     $checkPath = $DbPath
     if ($attempt -gt 1 -and $LiveDbPath -and (Test-Path -LiteralPath $LiveDbPath)) {
-      # 传入的副本是触发瞬间复制的；重试时重新从实时库复制，避免错过刚写入的行。
+      # 触发瞬间的副本可能还没落盘：重试时重新复制实时库。
       try {
         $tmp = Join-Path $env:TEMP ('xc-fresh-' + [guid]::NewGuid().ToString('N') + '.idb')
         $fs = [System.IO.File]::Open($LiveDbPath, 'Open', 'Read', 'ReadWrite')
@@ -132,7 +140,7 @@ try {
     exit 1
   }
 
-  Write-Json (New-Result $true $best.Table $best.Title $best.Content $best.Time.ToString('yyyy-MM-dd HH:mm:ss') '')
+  Write-Json (New-Result $true $best.Table $best.Sender $best.Content $best.Time.ToString('yyyy-MM-dd HH:mm:ss') '')
   exit 0
 } catch {
   Write-Json (New-Result $false '' '' '' '' $_.Exception.Message)

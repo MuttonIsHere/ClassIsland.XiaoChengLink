@@ -272,7 +272,7 @@ public sealed class WindowTextMonitor : BackgroundService
                 var message = readResult.Message;
                 PluginLog.Info(
                     $"数据库正文：table={message.Table} time={message.Time} " +
-                    $"title=「{Truncate(message.Title, 60)}」 content=「{Truncate(message.Content, 80)}」" +
+                    $"sender=「{Truncate(message.Sender, 60)}」 content=「{Truncate(message.Content, 80)}」" +
                     $"（触发窗口类={triggerWindow?.ClassName} 标题={triggerWindow?.Title}）");
             }
             else if (!string.IsNullOrWhiteSpace(readResult.Error))
@@ -283,17 +283,8 @@ public sealed class WindowTextMonitor : BackgroundService
 
         foreach (var notification in pending)
         {
-            var overlay = notification.OverlayText;
-            if (readResult?.Message is not null)
-            {
-                overlay = AppendMessageBody(overlay, readResult.Message);
-            }
-            else if (!string.IsNullOrWhiteSpace(readResult?.Error))
-            {
-                // 关键修复：读取失败不再静默退回通用提示，直接把原因拼进提醒正文，方便一眼定位。
-                overlay += $"\n【正文读取失败】{Truncate(readResult.Error!, 220)}";
-            }
-
+            // 弹窗只展示面向用户的三要素：【信息类型】发送人：正文；绝不显示窗口类名/进程名/英文表名。
+            var overlay = BuildUserFacingText(readResult?.Message, triggerWindow);
             var sent = await _notifier.SendAsync(overlay, notification.MaskText, cancellationToken).ConfigureAwait(false);
             PluginLog.Info(sent
                 ? $"提醒已入队：mask=「{notification.MaskText}」正文=「{Truncate(overlay, 200)}」"
@@ -454,35 +445,106 @@ public sealed class WindowTextMonitor : BackgroundService
                $"可见={window.IsVisible} 进程={window.ProcessName} 区域=({window.Left},{window.Top})-({window.Right},{window.Bottom})";
     }
 
-    /// <summary>把本地数据库读到的最新消息正文附加到提醒文本后（超长截断）。</summary>
-    private string AppendMessageBody(string overlay, LocalMessage message)
+    /// <summary>
+    /// 面向用户的提醒文本：只保留【信息类型】+ 发送者 + 正文。
+    /// 示例：
+    ///   【全屏播报】钱昶翰：最终测试XYZ
+    ///   【作业通知】记得完成数学卷子
+    ///   【全屏播报】您有一条新消息，请查看教室大屏
+    /// 不显示窗口类名、进程名、英文表名/技术细节。
+    /// </summary>
+    private string BuildUserFacingText(LocalMessage? message, WindowSnapshot? window)
     {
-        try
+        var type = message is not null ? TypeNameFromTable(message.Table) : TypeNameFromWindow(window);
+        var content = NormalizeOneLine(message?.Content);
+        if (content.Length > 0)
         {
-            var title = (message.Title ?? string.Empty).Trim();
-            var content = (message.Content ?? string.Empty).Trim();
-            if (title.Length == 0 && content.Length == 0)
-            {
-                return overlay;
-            }
-
-            var body = title.Length == 0
-                ? content
-                : (content.Length == 0 ? title : title + "\n" + content);
-
             var max = Math.Max(20, _options.MessageBodyMaxChars);
-            if (body.Length > max)
+            if (content.Length > max)
             {
-                body = body.Substring(0, max) + "…";
+                content = content.Substring(0, max) + "…";
             }
 
-            var tag = string.IsNullOrWhiteSpace(message.Table) ? "消息" : message.Table;
-            return overlay + $"\n【{tag}】{body}";
+            var sender = NormalizeOneLine(message?.Sender);
+            return sender.Length > 0
+                ? $"【{type}】{sender}：{content}"
+                : $"【{type}】{content}";
         }
-        catch
+
+        return $"【{type}】您有一条新消息，请查看教室大屏";
+    }
+
+    private static string NormalizeOneLine(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
         {
-            return overlay;
+            return string.Empty;
         }
+
+        var sb = new System.Text.StringBuilder(text.Length);
+        var lastWasSpace = false;
+        foreach (var c in text)
+        {
+            if (c == '\r' || c == '\n' || c == '\t' || c == ' ')
+            {
+                if (!lastWasSpace && sb.Length > 0)
+                {
+                    sb.Append(' ');
+                    lastWasSpace = true;
+                }
+
+                continue;
+            }
+
+            sb.Append(c);
+            lastWasSpace = false;
+        }
+
+        return sb.ToString().Trim();
+    }
+
+    /// <summary>数据库表名 → 中文信息类型（绝不把英文表名给用户看）。</summary>
+    private static string TypeNameFromTable(string? table)
+    {
+        return table switch
+        {
+            "WelcomeWord" => "全屏播报",
+            "HomeWork" => "作业通知",
+            "ClassNotice" => "班级通知",
+            "SchoolNotice" => "学校通知",
+            "ParentMsg" => "家长消息",
+            "ScheduledTask" => "定时播报",
+            "ExamClock" => "考试提醒",
+            "Album" => "班级相册",
+            "Video" => "视频通知",
+            "CountDown" => "倒计时提醒",
+            _ => "消息提醒",
+        };
+    }
+
+    /// <summary>读不到正文时，根据触发窗口判断信息类型（只用于给用户看的类型名）。</summary>
+    private static string TypeNameFromWindow(WindowSnapshot? window)
+    {
+        if (window is null)
+        {
+            return "消息提醒";
+        }
+
+        var cls = window.ClassName ?? string.Empty;
+        var title = window.Title ?? string.Empty;
+        if (cls.IndexOf("Text2Voice", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            title.IndexOf("全屏播报", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return "全屏播报";
+        }
+
+        if (cls.IndexOf("MessageCenter", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            title.IndexOf("消息提醒", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return "消息提醒";
+        }
+
+        return "消息提醒";
     }
 
     private static string Truncate(string text, int maxChars)

@@ -24,8 +24,10 @@ public sealed class LocalMessage
 {
     public string Table { get; set; } = string.Empty;
 
-    public string Title { get; set; } = string.Empty;
+    /// <summary>发送人（WelcomeWord.AddUser / HomeWork.AddUserName 等；没有则为空）。</summary>
+    public string Sender { get; set; } = string.Empty;
 
+    /// <summary>正文（只接受非空 Content；发送人不会冒充正文）。</summary>
     public string Content { get; set; } = string.Empty;
 
     public string Time { get; set; } = string.Empty;
@@ -445,14 +447,14 @@ public sealed class LocalMessageReader
             var message = new LocalMessage
             {
                 Table = GetString(root, "table"),
-                Title = GetString(root, "title"),
+                Sender = GetString(root, "sender"),
                 Content = GetString(root, "content"),
                 Time = GetString(root, "time"),
             };
 
-            if (string.IsNullOrWhiteSpace(message.Title) && string.IsNullOrWhiteSpace(message.Content))
+            if (string.IsNullOrWhiteSpace(message.Content))
             {
-                return new MessageReadResult { Error = "脚本返回的标题/正文都为空：" + Truncate(json, 180) };
+                return new MessageReadResult { Error = "脚本返回的正文为空" };
             }
 
             return new MessageReadResult { Message = message };
