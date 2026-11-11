@@ -81,6 +81,7 @@ public sealed class XiaoChengLinkPlugin : PluginBase
 
             // 7) 后台监控服务（随 IHost.StartAsync 启动；内部全部 try/catch）
             services.AddHostedService<WindowTextMonitor>();
+            services.AddHostedService<ExamMonitor>();
 
             // 7.1) 语音对讲：状态机后台服务 + 主界面组件
             services.AddSingleton<VoiceIntercomMonitor>();
