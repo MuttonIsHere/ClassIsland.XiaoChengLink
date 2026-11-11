@@ -19,8 +19,9 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>XiaoChengLink</AssemblyName>
     <RootNamespace>XiaoChengLink</RootNamespace>
-    <Version>1.4.1.0</Version>
+    <Version>1.4.2.0</Version>
     <EnableDynamicLoading>true</EnableDynamicLoading>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <UseWPF>true</UseWPF>
     <CreateCipx>true</CreateCipx>
   </PropertyGroup>
