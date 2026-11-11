@@ -32,6 +32,7 @@ using Microsoft.Extensions.Hosting;
 using XiaoChengLink.Logging;
 using XiaoChengLink.Monitoring;
 using XiaoChengLink.Notification;
+using XiaoChengLink.Components;
 using XiaoChengLink.Settings;
 
 namespace XiaoChengLink;
@@ -80,6 +81,19 @@ public sealed class XiaoChengLinkPlugin : PluginBase
 
             // 7) 后台监控服务（随 IHost.StartAsync 启动；内部全部 try/catch）
             services.AddHostedService<WindowTextMonitor>();
+
+            // 7.1) 语音对讲：状态机后台服务 + 主界面组件
+            services.AddSingleton<VoiceIntercomMonitor>();
+            services.AddHostedService(serviceProvider => serviceProvider.GetRequiredService<VoiceIntercomMonitor>());
+            try
+            {
+                services.AddComponent<VoiceIntercomComponent>();
+                PluginLog.Info("语音对讲组件已注册：「小橙语音对讲」（需要在 主界面 → 组件 里添加才会显示）");
+            }
+            catch (Exception ex)
+            {
+                PluginLog.Error("注册语音对讲组件失败（其余功能继续工作）", ex);
+            }
 
             // 8) 设置页：设置 → 插件 → 「小橙看班联动」
             //    AddSettingsPage<T>() 读取 T 上的 [SettingsPageInfo]（id/name/分类），

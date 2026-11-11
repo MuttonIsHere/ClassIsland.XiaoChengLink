@@ -148,6 +148,13 @@ public sealed class WindowTextMonitor : BackgroundService
                 return;
             }
 
+            // 语音对讲/录音播放窗口由 VoiceIntercomMonitor 专门处理（组件 + 开始/结束提醒），
+            // 普通“窗口出现/关键词/画面变化”监控忽略它，避免同一次播放弹两条提醒。
+            if (IsVoiceIntercomWindow(window.ClassName))
+            {
+                continue;
+            }
+
             seenHandles.Add(window.Handle);
             _windowStates.TryGetValue(window.Handle, out var previousState);
 
@@ -293,6 +300,45 @@ public sealed class WindowTextMonitor : BackgroundService
 
         LogDiagnostics(windows.Count, matchedVisible);
         PruneCooldownTable();
+    }
+
+    private bool IsVoiceIntercomWindow(string? className)
+    {
+        if (string.IsNullOrWhiteSpace(className))
+        {
+            return false;
+        }
+
+        var patterns = _options.VoiceIntercomWindowClassPatterns;
+        if (patterns is null || patterns.Length == 0)
+        {
+            return string.Equals(className, "FMTfrmSpeaker", StringComparison.OrdinalIgnoreCase);
+        }
+
+        foreach (var pattern in patterns)
+        {
+            if (string.IsNullOrWhiteSpace(pattern))
+            {
+                continue;
+            }
+
+            try
+            {
+                if (System.Text.RegularExpressions.Regex.IsMatch(
+                        className,
+                        pattern,
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase,
+                        TimeSpan.FromMilliseconds(100)))
+                {
+                    return true;
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        return false;
     }
 
     /// <summary>对单个可见窗口做截图对比；画面变化超过阈值且通过节流则加入待发提醒，返回是否加入。</summary>

@@ -146,6 +146,43 @@ public sealed class MonitorOptions
     /// <summary>正文最大字符数（超出截断），默认 300。</summary>
     public int MessageBodyMaxChars { get; set; } = 300;
 
+    // ── 语音对讲（录音发到电脑后播放）──────────────────────────────────────
+    /// <summary>是否启用语音对讲状态监控/组件/开始结束提醒。默认 true。</summary>
+    public bool VoiceIntercomEnabled { get; set; } = true;
+
+    /// <summary>判定为语音对讲中的窗口类名正则（默认 FMTfrmSpeaker；实测播放录音时可见）。</summary>
+    public string[] VoiceIntercomWindowClassPatterns { get; set; } = { "^FMTfrmSpeaker$" };
+
+    /// <summary>连续检测到对讲窗口多少秒才算开始（防抖），默认 2 秒。</summary>
+    public int VoiceIntercomStartDebounceSeconds { get; set; } = 2;
+
+    /// <summary>连续检测不到对讲窗口多少秒才算结束（防抖），默认 3 秒。</summary>
+    public int VoiceIntercomEndDebounceSeconds { get; set; } = 3;
+
+    /// <summary>组件空闲时显示的文字。</summary>
+    public string VoiceIntercomIdleText { get; set; } = "空闲";
+
+    /// <summary>组件对讲中显示的文字。</summary>
+    public string VoiceIntercomActiveText { get; set; } = "🔴 语音对讲中";
+
+    /// <summary>组件空闲文字颜色（#RRGGBB）。</summary>
+    public string VoiceIntercomIdleColor { get; set; } = "#9CA3AF";
+
+    /// <summary>组件对讲中文字颜色（#RRGGBB）。</summary>
+    public string VoiceIntercomActiveColor { get; set; } = "#EF4444";
+
+    /// <summary>开始对讲提醒的正文。</summary>
+    public string VoiceIntercomStartNotificationText { get; set; } = "老师正在说话";
+
+    /// <summary>结束对讲提醒的正文。</summary>
+    public string VoiceIntercomEndNotificationText { get; set; } = "对讲已结束";
+
+    /// <summary>开始提醒颜色（#RRGGBB）。</summary>
+    public string VoiceIntercomStartNotificationColor { get; set; } = "#EF4444";
+
+    /// <summary>结束提醒颜色（#RRGGBB）。</summary>
+    public string VoiceIntercomEndNotificationColor { get; set; } = "#10B981";
+
     /// <summary>轮询间隔（毫秒），默认 1500。运行时会被钳制到 [500, 60000]。</summary>
     public int PollIntervalMs { get; set; } = 1500;
 
@@ -197,6 +234,12 @@ public sealed class MonitorOptions
         MessageBodyMaxAgeSeconds = Math.Clamp(MessageBodyMaxAgeSeconds, 0, 86400);
         MessageBodyMaxChars = Math.Clamp(MessageBodyMaxChars, 20, 2000);
         MessageBodyFreshSeconds = Math.Clamp(MessageBodyFreshSeconds, 1, 600);
+        VoiceIntercomStartDebounceSeconds = Math.Clamp(VoiceIntercomStartDebounceSeconds, 1, 30);
+        VoiceIntercomEndDebounceSeconds = Math.Clamp(VoiceIntercomEndDebounceSeconds, 1, 30);
+        if (VoiceIntercomWindowClassPatterns is null || VoiceIntercomWindowClassPatterns.Length == 0)
+        {
+            VoiceIntercomWindowClassPatterns = new[] { "^FMTfrmSpeaker$" };
+        }
 
         if (string.IsNullOrWhiteSpace(KeywordMatchMode))
         {

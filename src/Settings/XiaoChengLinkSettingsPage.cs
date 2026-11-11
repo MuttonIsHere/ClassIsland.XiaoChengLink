@@ -81,6 +81,17 @@ public sealed class XiaoChengLinkSettingsPage : SettingsPageBase
     private TextBox? _dbPathBox;
     private NumericUpDown? _freshSecondsBox;
     private NumericUpDown? _bodyMaxCharsBox;
+    private CheckBox? _voiceEnabledCheck;
+    private NumericUpDown? _voiceStartDebounceBox;
+    private NumericUpDown? _voiceEndDebounceBox;
+    private TextBox? _voiceIdleTextBox;
+    private TextBox? _voiceActiveTextBox;
+    private TextBox? _voiceIdleColorBox;
+    private TextBox? _voiceActiveColorBox;
+    private TextBox? _voiceStartNotifTextBox;
+    private TextBox? _voiceEndNotifTextBox;
+    private TextBox? _voiceStartColorBox;
+    private TextBox? _voiceEndColorBox;
     private ComboBox? _matchModeCombo;
     private CheckBox? _triggerOnAppearCheck;
     private TextBlock? _statusText;
@@ -385,6 +396,73 @@ public sealed class XiaoChengLinkSettingsPage : SettingsPageBase
         root.Children.Add(_bodyMaxCharsBox);
         root.Children.Add(FieldHint("超出长度会截断并加省略号；默认 300。"));
 
+        // 10) 语音对讲（录音发送到电脑播放）
+        root.Children.Add(FieldLabel("语音对讲（录音发送到电脑后播放）"));
+        _voiceEnabledCheck = new CheckBox
+        {
+            Content = "启用语音对讲状态监控、主界面组件与开始/结束提醒",
+            IsChecked = _options.VoiceIntercomEnabled,
+            Margin = new Thickness(0, 4, 0, 8),
+        };
+        root.Children.Add(_voiceEnabledCheck);
+        root.Children.Add(FieldHint(
+            "实测：播放语音时小橙看班会显示可见的 FMTfrmSpeaker 窗口（ReviewPop），插件据此判断；" +
+            "状态机带防抖，闪烁不会反复弹提醒。组件需要在 主界面 → 组件 里手动添加「小橙语音对讲」。"));
+
+        root.Children.Add(FieldLabel("开始防抖（秒）"));
+        _voiceStartDebounceBox = new NumericUpDown
+        {
+            Minimum = 1m,
+            Maximum = 30m,
+            Increment = 1m,
+            Value = _options.VoiceIntercomStartDebounceSeconds,
+            FormatString = "0",
+            HorizontalAlignment = HorizontalAlignment.Left,
+            MinWidth = 200,
+            Margin = new Thickness(0, 0, 0, 8),
+        };
+        root.Children.Add(_voiceStartDebounceBox);
+        root.Children.Add(FieldHint("连续检测到对讲窗口 N 秒才算开始，默认 2 秒。"));
+
+        root.Children.Add(FieldLabel("结束防抖（秒）"));
+        _voiceEndDebounceBox = new NumericUpDown
+        {
+            Minimum = 1m,
+            Maximum = 30m,
+            Increment = 1m,
+            Value = _options.VoiceIntercomEndDebounceSeconds,
+            FormatString = "0",
+            HorizontalAlignment = HorizontalAlignment.Left,
+            MinWidth = 200,
+            Margin = new Thickness(0, 0, 0, 8),
+        };
+        root.Children.Add(_voiceEndDebounceBox);
+        root.Children.Add(FieldHint("连续检测不到对讲窗口 N 秒才算结束，默认 3 秒。"));
+
+        root.Children.Add(FieldLabel("组件空闲文字 / 颜色"));
+        _voiceIdleTextBox = new TextBox { Text = _options.VoiceIntercomIdleText, Margin = new Thickness(0, 0, 0, 4) };
+        _voiceIdleColorBox = new TextBox { Text = _options.VoiceIntercomIdleColor, Watermark = "#9CA3AF", Margin = new Thickness(0, 0, 0, 8) };
+        root.Children.Add(_voiceIdleTextBox);
+        root.Children.Add(_voiceIdleColorBox);
+
+        root.Children.Add(FieldLabel("组件对讲中文字 / 颜色"));
+        _voiceActiveTextBox = new TextBox { Text = _options.VoiceIntercomActiveText, Margin = new Thickness(0, 0, 0, 4) };
+        _voiceActiveColorBox = new TextBox { Text = _options.VoiceIntercomActiveColor, Watermark = "#EF4444", Margin = new Thickness(0, 0, 0, 8) };
+        root.Children.Add(_voiceActiveTextBox);
+        root.Children.Add(_voiceActiveColorBox);
+
+        root.Children.Add(FieldLabel("开始提醒文字 / 颜色"));
+        _voiceStartNotifTextBox = new TextBox { Text = _options.VoiceIntercomStartNotificationText, Margin = new Thickness(0, 0, 0, 4) };
+        _voiceStartColorBox = new TextBox { Text = _options.VoiceIntercomStartNotificationColor, Watermark = "#EF4444", Margin = new Thickness(0, 0, 0, 8) };
+        root.Children.Add(_voiceStartNotifTextBox);
+        root.Children.Add(_voiceStartColorBox);
+
+        root.Children.Add(FieldLabel("结束提醒文字 / 颜色"));
+        _voiceEndNotifTextBox = new TextBox { Text = _options.VoiceIntercomEndNotificationText, Margin = new Thickness(0, 0, 0, 4) };
+        _voiceEndColorBox = new TextBox { Text = _options.VoiceIntercomEndNotificationColor, Watermark = "#10B981", Margin = new Thickness(0, 0, 0, 8) };
+        root.Children.Add(_voiceEndNotifTextBox);
+        root.Children.Add(_voiceEndColorBox);
+
         // 9) 窗口出现触发
         _triggerOnAppearCheck = new CheckBox
         {
@@ -503,12 +581,13 @@ public sealed class XiaoChengLinkSettingsPage : SettingsPageBase
                 $"窗口出现触发={_options.TriggerOnWindowAppear} 冷却={_options.CooldownSeconds}s " +
                 $"画面阈值={_options.VisualChangeThresholdPercent:F2}% 全局节流={_options.NotificationThrottleSeconds}s " +
                 $"正文读库={_options.ReadMessageBodyFromDatabase} 新鲜度={_options.MessageBodyFreshSeconds}s 正文长度={_options.MessageBodyMaxChars} " +
+                $"语音对讲={_options.VoiceIntercomEnabled} 防抖={_options.VoiceIntercomStartDebounceSeconds}/{_options.VoiceIntercomEndDebounceSeconds}s " +
                 $"标题正则重载={scannerReloaded}");
 
             if (saved)
             {
                 SetStatus(
-                    "已保存，立即生效（标题正则已重载）。进程名/轮询间隔/冷却时间/窗口出现触发/画面变化阈值/全局节流/消息正文从下一轮扫描起生效；" +
+                    "已保存，立即生效（标题正则已重载）。进程名/轮询间隔/冷却时间/窗口出现触发/画面变化阈值/全局节流/消息正文/语音对讲从下一轮扫描起生效；" +
                     "关键词与匹配方式需重启插件后生效。",
                     success: true);
             }
@@ -567,6 +646,18 @@ public sealed class XiaoChengLinkSettingsPage : SettingsPageBase
         {
             _options.MessageBodyMaxChars = (int)bodyMaxChars;
         }
+
+        _options.VoiceIntercomEnabled = _voiceEnabledCheck?.IsChecked ?? _options.VoiceIntercomEnabled;
+        if (_voiceStartDebounceBox?.Value is decimal voiceStart) _options.VoiceIntercomStartDebounceSeconds = (int)voiceStart;
+        if (_voiceEndDebounceBox?.Value is decimal voiceEnd) _options.VoiceIntercomEndDebounceSeconds = (int)voiceEnd;
+        _options.VoiceIntercomIdleText = (_voiceIdleTextBox?.Text ?? _options.VoiceIntercomIdleText).Trim();
+        _options.VoiceIntercomActiveText = (_voiceActiveTextBox?.Text ?? _options.VoiceIntercomActiveText).Trim();
+        _options.VoiceIntercomIdleColor = (_voiceIdleColorBox?.Text ?? _options.VoiceIntercomIdleColor).Trim();
+        _options.VoiceIntercomActiveColor = (_voiceActiveColorBox?.Text ?? _options.VoiceIntercomActiveColor).Trim();
+        _options.VoiceIntercomStartNotificationText = (_voiceStartNotifTextBox?.Text ?? _options.VoiceIntercomStartNotificationText).Trim();
+        _options.VoiceIntercomEndNotificationText = (_voiceEndNotifTextBox?.Text ?? _options.VoiceIntercomEndNotificationText).Trim();
+        _options.VoiceIntercomStartNotificationColor = (_voiceStartColorBox?.Text ?? _options.VoiceIntercomStartNotificationColor).Trim();
+        _options.VoiceIntercomEndNotificationColor = (_voiceEndColorBox?.Text ?? _options.VoiceIntercomEndNotificationColor).Trim();
 
         _options.KeywordMatchMode = _matchModeCombo?.SelectedIndex == 1 ? MatchModeRegex : MatchModeContains;
         _options.TriggerOnWindowAppear = _triggerOnAppearCheck?.IsChecked ?? _options.TriggerOnWindowAppear;
@@ -628,6 +719,18 @@ public sealed class XiaoChengLinkSettingsPage : SettingsPageBase
         {
             _bodyMaxCharsBox.Value = _options.MessageBodyMaxChars;
         }
+
+        if (_voiceEnabledCheck is not null) _voiceEnabledCheck.IsChecked = _options.VoiceIntercomEnabled;
+        if (_voiceStartDebounceBox is not null) _voiceStartDebounceBox.Value = _options.VoiceIntercomStartDebounceSeconds;
+        if (_voiceEndDebounceBox is not null) _voiceEndDebounceBox.Value = _options.VoiceIntercomEndDebounceSeconds;
+        if (_voiceIdleTextBox is not null) _voiceIdleTextBox.Text = _options.VoiceIntercomIdleText;
+        if (_voiceActiveTextBox is not null) _voiceActiveTextBox.Text = _options.VoiceIntercomActiveText;
+        if (_voiceIdleColorBox is not null) _voiceIdleColorBox.Text = _options.VoiceIntercomIdleColor;
+        if (_voiceActiveColorBox is not null) _voiceActiveColorBox.Text = _options.VoiceIntercomActiveColor;
+        if (_voiceStartNotifTextBox is not null) _voiceStartNotifTextBox.Text = _options.VoiceIntercomStartNotificationText;
+        if (_voiceEndNotifTextBox is not null) _voiceEndNotifTextBox.Text = _options.VoiceIntercomEndNotificationText;
+        if (_voiceStartColorBox is not null) _voiceStartColorBox.Text = _options.VoiceIntercomStartNotificationColor;
+        if (_voiceEndColorBox is not null) _voiceEndColorBox.Text = _options.VoiceIntercomEndNotificationColor;
 
         if (_matchModeCombo is not null)
         {

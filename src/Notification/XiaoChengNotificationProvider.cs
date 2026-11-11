@@ -20,6 +20,7 @@
 
 using System;
 using System.Threading.Tasks;
+using Avalonia.Media;
 using Avalonia.Threading;
 using ClassIsland.Core.Abstractions.Services.NotificationProviders;
 using ClassIsland.Core.Attributes;
@@ -42,11 +43,11 @@ public sealed class XiaoChengNotificationProvider : NotificationProviderBase
     private static readonly TimeSpan UiDispatchTimeout = TimeSpan.FromSeconds(5);
 
     /// <summary>同步发送一条提醒（内部切到 Avalonia UI 线程后入队，不会长时间阻塞后台线程）。</summary>
-    public void Notify(string maskText, string overlayText, int maskSeconds = 3, int overlaySeconds = 8)
+    public void Notify(string maskText, string overlayText, int maskSeconds = 3, int overlaySeconds = 8, string? colorHex = null)
     {
         if (Dispatcher.UIThread.CheckAccess())
         {
-            ShowNotification(BuildRequest(maskText, overlayText, maskSeconds, overlaySeconds));
+            ShowNotification(BuildRequest(maskText, overlayText, maskSeconds, overlaySeconds, colorHex));
             return;
         }
 
@@ -55,7 +56,7 @@ public sealed class XiaoChengNotificationProvider : NotificationProviderBase
         {
             try
             {
-                ShowNotification(BuildRequest(maskText, overlayText, maskSeconds, overlaySeconds));
+                ShowNotification(BuildRequest(maskText, overlayText, maskSeconds, overlaySeconds, colorHex));
             }
             catch
             {
@@ -65,23 +66,49 @@ public sealed class XiaoChengNotificationProvider : NotificationProviderBase
     }
 
     /// <summary>异步发送一条提醒（在 Avalonia UI 线程构造并发送）。</summary>
-    public Task NotifyAsync(string maskText, string overlayText, int maskSeconds = 3, int overlaySeconds = 8)
+    public Task NotifyAsync(string maskText, string overlayText, int maskSeconds = 3, int overlaySeconds = 8, string? colorHex = null)
     {
         var operation = Dispatcher.UIThread.InvokeAsync(() =>
-            ShowNotification(BuildRequest(maskText, overlayText, maskSeconds, overlaySeconds)));
+            ShowNotification(BuildRequest(maskText, overlayText, maskSeconds, overlaySeconds, colorHex)));
         return operation.GetTask();
     }
 
-    private static NotificationRequest BuildRequest(string maskText, string overlayText, int maskSeconds, int overlaySeconds)
+    private static NotificationRequest BuildRequest(string maskText, string overlayText, int maskSeconds, int overlaySeconds, string? colorHex)
     {
+        var brush = BuildBrush(colorHex);
         return new NotificationRequest
         {
             MaskContent = NotificationContent.CreateTwoIconsMask(
                 maskText,
-                factory: content => content.Duration = TimeSpan.FromSeconds(Math.Max(maskSeconds, 1))),
+                factory: content =>
+                {
+                    content.Duration = TimeSpan.FromSeconds(Math.Max(maskSeconds, 1));
+                    if (brush is not null) content.Color = brush;
+                }),
             OverlayContent = NotificationContent.CreateSimpleTextContent(
                 overlayText,
-                content => content.Duration = TimeSpan.FromSeconds(Math.Max(overlaySeconds, 1))),
+                content =>
+                {
+                    content.Duration = TimeSpan.FromSeconds(Math.Max(overlaySeconds, 1));
+                    if (brush is not null) content.Color = brush;
+                }),
         };
+    }
+
+    private static IBrush? BuildBrush(string? colorHex)
+    {
+        if (string.IsNullOrWhiteSpace(colorHex))
+        {
+            return null;
+        }
+
+        try
+        {
+            return new SolidColorBrush(Color.Parse(colorHex.Trim()));
+        }
+        catch
+        {
+            return null;
+        }
     }
 }

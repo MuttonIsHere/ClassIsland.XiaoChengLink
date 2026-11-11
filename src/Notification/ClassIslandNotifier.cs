@@ -35,7 +35,7 @@ public sealed class ClassIslandNotifier
     }
 
     /// <summary>同步发送：正文 overlayText，遮罩（标题）maskText 为空时用默认标题。</summary>
-    public bool Send(string overlayText, string? maskText = null)
+    public bool Send(string overlayText, string? maskText = null, string? colorHex = null)
     {
         try
         {
@@ -43,7 +43,8 @@ public sealed class ClassIslandNotifier
                 ResolveMaskText(maskText),
                 overlayText,
                 _options.MaskDurationSeconds,
-                _options.NotificationDurationSeconds);
+                _options.NotificationDurationSeconds,
+                colorHex);
             return true;
         }
         catch (Exception ex)
@@ -54,7 +55,7 @@ public sealed class ClassIslandNotifier
     }
 
     /// <summary>异步发送，带超时与异常兜底；失败/超时返回 false。</summary>
-    public async Task<bool> SendAsync(string overlayText, string? maskText = null, CancellationToken cancellationToken = default)
+    public async Task<bool> SendAsync(string overlayText, string? maskText = null, CancellationToken cancellationToken = default, string? colorHex = null)
     {
         if (cancellationToken.IsCancellationRequested)
         {
@@ -67,7 +68,8 @@ public sealed class ClassIslandNotifier
                 ResolveMaskText(maskText),
                 overlayText,
                 _options.MaskDurationSeconds,
-                _options.NotificationDurationSeconds);
+                _options.NotificationDurationSeconds,
+                colorHex);
 
             var completed = await Task.WhenAny(sendTask, Task.Delay(SendTimeout, cancellationToken)).ConfigureAwait(false);
             if (completed != sendTask)
