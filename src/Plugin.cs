@@ -73,6 +73,9 @@ public sealed class XiaoChengLinkPlugin : PluginBase
             // 本地数据库正文读取器（调用 32 位 PowerShell 辅助脚本读取 Data.idb）
             services.AddSingleton<LocalMessageReader>();
 
+            // 调课联动：把读到的消息正文转发给「QQ 调课同步」插件（存在时）
+            services.AddSingleton<Integration.TiaokeBridgeClient>();
+
             // 5) 提醒提供方：注册元数据 + 可注入单例 + IHostedService（宿主启动时构造/启动）
             AddSharedNotificationProvider<XiaoChengNotificationProvider>(services);
 

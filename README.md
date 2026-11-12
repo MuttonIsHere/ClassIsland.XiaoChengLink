@@ -524,3 +524,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build-env\verify-plu
 - `tools/build-env/CompileSmoke/NotificationSmoke.cs`、`UiaSmoke.cs`（通知/UIA 编译验证）
 - `research/uia/inart_pc-*.json`、`msaa-probe-*.json`（小橙看班窗口/UIA/MSAA 实测）
 - 本插件编译产物与日志：`plugin/bin/XiaoChengLink.dll`（50688 B，含设置页）、`plugin/bin/XiaoChengLink.build.log`
+
+---
+
+## 调课联动（v2.0.2.0 起）
+
+如果同时安装了 **QQ 调课同步（QqClassSync）** 插件，本插件会把从小橙看班数据库读到的消息正文
+转发给它，由对方统一解析并修改 ClassIsland 的临时层课表，大屏会弹出「【来源：小橙看班】」的提醒。
+
+- **触发时机**：① 窗口提醒/画面变化触发时立即转发；② 兜底轮询（`tiaokeLinkPollSeconds`，默认 30 秒）
+  主动读库转发，避免不弹窗的通知被漏掉。
+- **耦合方式**：进程内反射调用 `QqClassSync.Bridge.TiaokeBridge.Submit(text, source)`，
+  不编译期引用对方程序集；对方没装时自动跳过，只偶尔记一条日志。
+- **关闭方式**：把 `settings.json` 里的 `tiaokeLinkPollSeconds` 设为 `0`（关闭兜底轮询），
+  或直接卸载 QQ 调课同步插件。

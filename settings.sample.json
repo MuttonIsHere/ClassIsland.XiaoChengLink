@@ -18,6 +18,7 @@
   "messageBodyMaxAgeSeconds": 3600,
   "messageBodyFreshSeconds": 30,
   "messageBodyMaxChars": 300,
+  "tiaokeLinkPollSeconds": 30,
   "voiceIntercomEnabled": true,
   "voiceIntercomWindowClassPatterns": ["^FMTfrmSpeaker$"],
   "voiceIntercomStartDebounceSeconds": 2,

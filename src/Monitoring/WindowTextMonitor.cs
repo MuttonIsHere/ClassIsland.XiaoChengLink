@@ -41,6 +41,7 @@ public sealed class WindowTextMonitor : BackgroundService
     private readonly KeywordMatcher _keywordMatcher;
     private readonly ClassIslandNotifier _notifier;
     private readonly LocalMessageReader _messageReader;
+    private readonly Integration.TiaokeBridgeClient _tiaokeBridge;
 
     /// <summary>窗口句柄 -> 上一轮的可见性/文本哈希/画面快照。</summary>
     private readonly Dictionary<IntPtr, WindowState> _windowStates = new();
@@ -55,13 +56,17 @@ public sealed class WindowTextMonitor : BackgroundService
     /// <summary>上次成功发出提醒的时间（UTC），用于全局节流（避免多窗口/重启连发）。</summary>
     private DateTime _lastAnyNotificationUtc = DateTime.MinValue;
 
+    /// <summary>上次「调课联动兜底轮询」读数据库的时间（UTC）。</summary>
+    private DateTime _lastTiaokePollUtc = DateTime.MinValue;
+
     public WindowTextMonitor(
         MonitorOptions options,
         WindowScanner scanner,
         UiaTextReader uiaTextReader,
         KeywordMatcher keywordMatcher,
         ClassIslandNotifier notifier,
-        LocalMessageReader messageReader)
+        LocalMessageReader messageReader,
+        Integration.TiaokeBridgeClient tiaokeBridge)
     {
         _options = options;
         _scanner = scanner;
@@ -69,6 +74,7 @@ public sealed class WindowTextMonitor : BackgroundService
         _keywordMatcher = keywordMatcher;
         _notifier = notifier;
         _messageReader = messageReader;
+        _tiaokeBridge = tiaokeBridge;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -281,10 +287,46 @@ public sealed class WindowTextMonitor : BackgroundService
                     $"数据库正文：table={message.Table} time={message.Time} " +
                     $"sender=「{Truncate(message.Sender, 60)}」 content=「{Truncate(message.Content, 80)}」" +
                     $"（触发窗口类={triggerWindow?.ClassName} 标题={triggerWindow?.Title}）");
+
+                // ── 调课联动：把正文交给「QQ 调课同步」插件解析（找不到对方插件时它会静默跳过） ──
+                try
+                {
+                    _tiaokeBridge.TrySubmit(message.Content, message.Sender, message.Time);
+                }
+                catch (Exception ex)
+                {
+                    PluginLog.Warn("调课联动提交异常：" + ex.GetType().Name);
+                }
             }
             else if (!string.IsNullOrWhiteSpace(readResult.Error))
             {
                 PluginLog.Warn($"数据库正文读取失败（将直接显示在提醒里）：{readResult.Error}");
+            }
+        }
+
+        // ── 调课联动兜底轮询 ────────────────────────────────────────────────
+        // 有些老师发通知不会触发窗口提醒（不弹窗/不变化），这里按低频间隔主动读一次数据库，
+        // 把可能是调课的消息交给「QQ 调课同步」。间隔由 TiaokeLinkPollSeconds 控制，0 表示关闭。
+        if (pending.Count == 0
+            && _options.TiaokeLinkPollSeconds > 0
+            && windows.Count > 0
+            && (DateTime.UtcNow - _lastTiaokePollUtc).TotalSeconds >= _options.TiaokeLinkPollSeconds)
+        {
+            _lastTiaokePollUtc = DateTime.UtcNow;
+            var pollWindow = triggerWindow ?? windows[0];
+            try
+            {
+                // 新鲜度放宽到「3 个轮询周期」，避免刚好卡在两个轮询之间错过消息。
+                var pollFreshness = Math.Max(_options.MessageBodyFreshSeconds, _options.TiaokeLinkPollSeconds * 3);
+                var pollResult = _messageReader.Read(pollWindow?.ClassName, pollWindow?.Title, pollFreshness);
+                if (pollResult.Message is { } pollMessage)
+                {
+                    _tiaokeBridge.TrySubmit(pollMessage.Content, pollMessage.Sender, pollMessage.Time);
+                }
+            }
+            catch (Exception ex)
+            {
+                PluginLog.Warn("调课联动兜底轮询失败：" + ex.GetType().Name);
             }
         }
 

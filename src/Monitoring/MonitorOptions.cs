@@ -146,6 +146,13 @@ public sealed class MonitorOptions
     /// <summary>正文最大字符数（超出截断），默认 300。</summary>
     public int MessageBodyMaxChars { get; set; } = 300;
 
+    /// <summary>
+    /// 调课联动兜底轮询间隔（秒）。0 = 关闭。
+    /// 开启后即使窗口没有触发提醒，也会按该间隔读一次数据库，把可能是调课的消息
+    /// 转交给「QQ 调课同步」插件解析（默认 30 秒，避免频繁复制数据库的开销）。
+    /// </summary>
+    public int TiaokeLinkPollSeconds { get; set; } = 30;
+
     // ── 语音对讲（录音发到电脑后播放）──────────────────────────────────────
     /// <summary>是否启用语音对讲状态监控/组件/开始结束提醒。默认 true。</summary>
     public bool VoiceIntercomEnabled { get; set; } = true;

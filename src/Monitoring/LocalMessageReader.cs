@@ -69,7 +69,10 @@ public sealed class LocalMessageReader
     }
 
     /// <summary>读取触发窗口对应的最新消息；失败时返回带 Error 的结果（不会抛出）。</summary>
-    public MessageReadResult Read(string? windowClass = null, string? windowTitle = null)
+    /// <param name="windowClass">触发窗口类名（用于选择数据表）。</param>
+    /// <param name="windowTitle">触发窗口标题（用于选择数据表）。</param>
+    /// <param name="freshnessOverrideSeconds">正文新鲜度覆盖（秒）。为空时用配置值。</param>
+    public MessageReadResult Read(string? windowClass = null, string? windowTitle = null, int? freshnessOverrideSeconds = null)
     {
         if (!_options.ReadMessageBodyFromDatabase)
         {
@@ -111,7 +114,7 @@ public sealed class LocalMessageReader
                 return Fail(run.Error ?? "PowerShell 未返回输出");
             }
 
-            var parsed = ParseResult(run.Output, tables, Math.Max(1, _options.MessageBodyFreshSeconds));
+            var parsed = ParseResult(run.Output, tables, Math.Max(1, freshnessOverrideSeconds ?? _options.MessageBodyFreshSeconds));
             if (parsed.Success)
             {
                 return parsed;
