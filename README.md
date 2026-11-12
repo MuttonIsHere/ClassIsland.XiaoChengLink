@@ -538,3 +538,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build-env\verify-plu
   不编译期引用对方程序集；对方没装时自动跳过，只偶尔记一条日志。
 - **关闭方式**：把 `settings.json` 里的 `tiaokeLinkPollSeconds` 设为 `0`（关闭兜底轮询），
   或直接卸载 QQ 调课同步插件。
+
+---
+
+## v2.0.3 变更（调课联动加固）
+
+- 所有联动日志统一前缀 `[调课中枢]`，可与 QQ 调课同步插件的日志一起筛选
+- 连接「QQ 调课同步」时读取其桥接契约版本（当前 `2`，支持批量/互换）并打印；
+  对方未声明版本时仅警告、仍尝试转发，两个插件可独立升级

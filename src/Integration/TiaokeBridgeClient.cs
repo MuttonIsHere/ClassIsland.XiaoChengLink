@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Reflection;
 using XiaoChengLink.Logging;
 
@@ -56,7 +56,7 @@ public sealed class TiaokeBridgeClient
             if (DateTime.UtcNow - _lastMissLogUtc > MissLogInterval)
             {
                 _lastMissLogUtc = DateTime.UtcNow;
-                PluginLog.Info("未检测到「QQ 调课同步」插件（QqClassSync），小橙看班调课联动暂不生效。");
+                PluginLog.Info("[调课中枢] 未检测到「QQ 调课同步」插件（QqClassSync），小橙看班调课联动暂不生效。");
             }
 
             return false;
@@ -69,13 +69,13 @@ public sealed class TiaokeBridgeClient
             {
                 _lastKey = key;
                 _lastKeyUtc = DateTime.UtcNow;
-                PluginLog.Info("已把消息正文转发给「QQ 调课同步」，由对方解析并改课表（来源：小橙看班）。");
+                PluginLog.Info("[调课中枢] 已把消息正文转发给「QQ 调课同步」，由对方解析并改课表（来源：小橙看班）。");
                 return true;
             }
         }
         catch (Exception ex)
         {
-            PluginLog.Warn("转发给「QQ 调课同步」失败：" + ex.GetType().Name);
+            PluginLog.Warn("[调课中枢] 转发给「QQ 调课同步」失败：" + ex.GetType().Name);
         }
 
         return false;
@@ -113,7 +113,20 @@ public sealed class TiaokeBridgeClient
                 if (method is not null && method.ReturnType == typeof(bool))
                 {
                     _submit = method;
-                    PluginLog.Info("调课联动已连接「QQ 调课同步」插件。");
+
+                    var version = type
+                        .GetProperty("ContractVersion", BindingFlags.Public | BindingFlags.Static)?
+                        .GetValue(null)?.ToString();
+
+                    if (string.IsNullOrWhiteSpace(version))
+                    {
+                        PluginLog.Info("[调课中枢] 已连接「QQ 调课同步」，但对方未声明契约版本（可能是旧版），仍尝试转发。");
+                    }
+                    else
+                    {
+                        PluginLog.Info($"[调课中枢] 调课联动已连接「QQ 调课同步」插件（契约版本 {version}）。");
+                    }
+
                     return true;
                 }
             }
