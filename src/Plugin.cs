@@ -1,4 +1,4 @@
-// ─── 插件入口 ───────────────────────────────────────────────────────────────
+﻿// ─── 插件入口 ───────────────────────────────────────────────────────────────
 // [PluginEntrance] + PluginBase.Initialize(HostBuilderContext, IServiceCollection)
 // 均已由研究文档（research/classisland-api/classisland-2.1-plugin-api.md §4）用 Mono.Cecil
 // 核对过 2.1.0.1 二进制签名；注意 2.1.0.1 的 PluginBase **没有** OnShutdown，不要照抄旧文档。
@@ -84,6 +84,11 @@ public sealed class XiaoChengLinkPlugin : PluginBase
 
             // 7) 后台监控服务（随 IHost.StartAsync 启动；内部全部 try/catch）
             services.AddHostedService<WindowTextMonitor>();
+
+            // 7.0) 考试模式全局免打扰：考试状态 + 高优先级提醒消费者
+            services.AddSingleton<ExamModeState>();
+            services.AddSingleton<ExamDndConsumer>();
+            services.AddHostedService(serviceProvider => serviceProvider.GetRequiredService<ExamDndConsumer>());
             services.AddHostedService<ExamMonitor>();
 
             // 7.1) 语音对讲：状态机后台服务 + 主界面组件

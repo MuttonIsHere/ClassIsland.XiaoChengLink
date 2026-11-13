@@ -1,4 +1,4 @@
-// ─── MonitorOptions —— 插件配置模型（settings.json）──────────────────────────
+﻿// ─── MonitorOptions —— 插件配置模型（settings.json）──────────────────────────
 // 配置文件：<PluginConfigFolder>/settings.json
 //   · 首次运行不存在时：写入默认配置并记日志（不是 fatal，插件继续用内存默认值）。
 //   · 解析失败时：记 Error 日志并回落到默认值（绝不让配置问题拖垮插件/宿主）。
@@ -143,6 +143,21 @@ public sealed class MonitorOptions
     /// </summary>
     public int MessageBodyFreshSeconds { get; set; } = 30;
 
+    // ── 考试模式全局免打扰 ────────────────────────────────────────────────
+    /// <summary>考试进行中是否拦截 ClassIsland 的提醒（白名单除外）。</summary>
+    public bool ExamDndEnabled { get; set; } = true;
+
+    /// <summary>干跑模式：只记录来源、不真正拦截，用于验证。</summary>
+    public bool ExamDndDryRun { get; set; } = false;
+
+    /// <summary>强制视为考试中（仅联调用，正式使用请关闭）。</summary>
+    public bool ExamDndForceActive { get; set; } = false;
+
+    /// <summary>开机自检：8 秒后自动投递两条测试提醒，验证来源 ID 与拦截/放行。</summary>
+    public bool ExamDndSelfTest { get; set; } = false;
+
+    /// <summary>考试静默白名单（提醒提供方 GUID，默认地震预警）。</summary>
+    public string[] ExamDndWhitelistProviderGuids { get; set; } = { "B27C0AF3-C917-44DE-A61D-8010C3F3FB92" };
     /// <summary>正文最大字符数（超出截断），默认 300。</summary>
     public int MessageBodyMaxChars { get; set; } = 300;
 

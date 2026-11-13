@@ -546,3 +546,25 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build-env\verify-plu
 - 所有联动日志统一前缀 `[调课中枢]`，可与 QQ 调课同步插件的日志一起筛选
 - 连接「QQ 调课同步」时读取其桥接契约版本（当前 `2`，支持批量/互换）并打印；
   对方未声明版本时仅警告、仍尝试转发，两个插件可独立升级
+
+---
+
+## 考试模式全局免打扰（v2.1.0）
+
+考试进行中（ExamClock 判定），ClassIsland 的上课/下课铃、自动化提醒都会被静默拦截，
+**地震预警永远放行**。
+
+- 实现：注册优先级 `-100000` 的 `INotificationConsumer`；来源 GUID 与名称通过反射读取
+- 放行：`ticket.Cancel()` 退回提醒主机，交给下一个消费者播放
+- 拦截：取消提醒的 `CompletedTokenSource`，静默完成
+- 白名单默认：`B27C0AF3-C917-44DE-A61D-8010C3F3FB92`（地震预警）
+- 联调开关：`examDndDryRun`（干跑）、`examDndForceActive`（强制考试中）、`examDndSelfTest`（开机自检）
+
+日志示例：
+
+```
+[调课中枢] 考试静默：来源=地震预警（b27c0af3-...）→ 放行（白名单）
+[调课中枢] 考试静默：来源=未知提供方（11111111-...）→ 拦截
+```
+
+> 注意：来源字段是 ClassIsland 的 internal 成员，本功能依赖反射；ClassIsland 大版本升级后需复测。

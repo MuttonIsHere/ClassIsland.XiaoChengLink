@@ -1,4 +1,4 @@
-// ─── ExamMonitor —— 考试模式提醒（极简版，无 UI/设置）───────────────
+﻿// ─── ExamMonitor —— 考试模式提醒（极简版，无 UI/设置）───────────────
 // 轮询 32 位 PowerShell 读 ExamClock 表；开始 / 剩余15分 / 剩余5分 / 结束各提醒一次。
 // 去重键：ExamGuid + 阶段；内存 HashSet，重启后可能重发一次（可接受）。
 
@@ -25,13 +25,16 @@ public sealed class ExamMonitor : BackgroundService
 
     private readonly MonitorOptions _options;
     private readonly ClassIslandNotifier _notifier;
+    private readonly ExamModeState _examState;
     private readonly HashSet<string> _sent = new(StringComparer.OrdinalIgnoreCase);
+    private DateTime _lastExamStateLogUtc = DateTime.MinValue;
     private readonly object _gate = new();
 
-    public ExamMonitor(MonitorOptions options, ClassIslandNotifier notifier)
+    public ExamMonitor(MonitorOptions options, ClassIslandNotifier notifier, ExamModeState examState)
     {
         _options = options;
         _notifier = notifier;
+        _examState = examState;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -59,6 +62,9 @@ public sealed class ExamMonitor : BackgroundService
 
     private void Evaluate(List<ExamRow> rows, DateTime now)
     {
+        var anyActive = false;
+        var activeCourse = string.Empty;
+
         foreach (var row in rows)
         {
             var id = string.IsNullOrWhiteSpace(row.ExamGuid) ? row.Id : row.ExamGuid;
@@ -72,6 +78,12 @@ public sealed class ExamMonitor : BackgroundService
             if (end.Value <= begin.Value) continue;
 
             var course = string.IsNullOrWhiteSpace(row.Course) ? "未知科目" : row.Course.Trim();
+
+            if (now >= begin.Value && now < end.Value)
+            {
+                anyActive = true;
+                if (string.IsNullOrEmpty(activeCourse)) activeCourse = course;
+            }
 
             // 开始：只对正在进行的考试发；启动时若已在考试中也会补一次（去重保护）
             if (now >= begin.Value && now < end.Value && SendOnce(id + ":start"))
@@ -96,6 +108,14 @@ public sealed class ExamMonitor : BackgroundService
             {
                 Notify("考试结束，请立即停笔！", "#10B981");
             }
+        }
+
+        // 更新考试模式状态（供考试静默消费者读取）
+        _examState.Update(anyActive, activeCourse);
+        if (anyActive && (DateTime.UtcNow - _lastExamStateLogUtc).TotalSeconds >= 60)
+        {
+            _lastExamStateLogUtc = DateTime.UtcNow;
+            PluginLog.Info($"[调课中枢] 考试进行中：{activeCourse}（提醒静默{(anyActive ? "生效" : "未生效")}）");
         }
     }
 
